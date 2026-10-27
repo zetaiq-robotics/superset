@@ -225,6 +225,42 @@ describe('Dashboard', () => {
       expect(mockTriggerQuery).toHaveBeenCalled();
     });
 
+    // ZetaIQ (variables spec G1)
+    test('a native filter change skips charts whose dataset cannot use it', () => {
+      mockGetRelatedCharts.mockReturnValue([1, 2]);
+      const robot = (val: string[]) => ({
+        'NATIVE_FILTER-robot': {
+          values: { filters: [{ col: 'robot', op: 'IN', val }] },
+          scope: [1, 2],
+        },
+      });
+      const scoped = {
+        slices: {
+          1: { slice_id: 1, form_data: { datasource: '13__table' } },
+          2: { slice_id: 2, form_data: { datasource: '1__table' } },
+        },
+        datasources: {
+          '13__table': { column_names: ['robot'], sql: null },
+          '1__table': { column_names: ['ServiceName'], sql: null },
+        },
+      };
+      const { rerender } = renderDashboard({
+        ...scoped,
+        activeFilters: robot(['SB-001']),
+      });
+
+      rerender(
+        <PluginContext.Provider value={mockPluginContext}>
+          <Dashboard {...props} {...scoped} activeFilters={robot(['SB-012'])}>
+            <ChildrenComponent />
+          </Dashboard>
+        </PluginContext.Provider>,
+      );
+
+      expect(mockTriggerQuery).toHaveBeenCalledWith(true, 1);
+      expect(mockTriggerQuery).not.toHaveBeenCalledWith(true, 2);
+    });
+
     test('should call refresh if a filter is added', () => {
       mockGetRelatedCharts.mockReturnValue([1]);
       const { rerender } = renderDashboard({ activeFilters: OVERRIDE_FILTERS });
