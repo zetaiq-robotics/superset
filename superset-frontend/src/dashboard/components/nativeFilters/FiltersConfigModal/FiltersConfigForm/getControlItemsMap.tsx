@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: filter plugins may declare text, select and column
+ * controls besides checkboxes.
  */
 import { CustomControlItem } from '@superset-ui/chart-controls';
 import { ReactNode } from 'react';
@@ -22,6 +25,8 @@ import {
   Checkbox,
   FormItem,
   InfoTooltip,
+  Input,
+  Select,
   Tooltip,
   type FormInstance,
 } from '@superset-ui/core/components';
@@ -92,6 +97,83 @@ export default function getControlItemsMap({
     string,
     { element: ReactNode; checked: boolean }
   > = {};
+
+  // Text, select and column controls a filter plugin declares by
+  // `config.type`; saved under controlValues like the checkboxes.
+  const typedControl = (
+    controlItem: CustomControlItem,
+    initialValue: unknown,
+  ): ReactNode => {
+    const { type, label, description, choices, resetConfig } =
+      controlItem.config as Record<string, any>;
+    const labelText = typeof label === 'function' ? label() : label;
+    const onChange = () => {
+      if (resetConfig) {
+        setNativeFilterFieldValues(form, filterId, { defaultDataMask: null });
+      }
+      formChanged();
+      forceUpdate();
+    };
+    let input: ReactNode;
+    if (type === 'TextControl') {
+      input = <Input onChange={onChange} />;
+    } else if (type === 'TextAreaControl') {
+      input = <Input.TextArea rows={4} onChange={onChange} />;
+    } else if (type === 'SelectControl') {
+      input = (
+        <Select
+          ariaLabel={labelText}
+          options={(choices ?? []).map(([value, text]: [string, string]) => ({
+            value,
+            label: text,
+          }))}
+          onChange={onChange}
+        />
+      );
+    } else if (type === 'ColumnSelectControl') {
+      input = (
+        <ColumnSelect
+          allowClear
+          form={form}
+          filterId={filterId}
+          fieldPath={['controlValues', controlItem.name]}
+          datasetId={datasetId}
+          datasourceType={datasourceType}
+          onChange={onChange}
+        />
+      );
+    } else {
+      return null;
+    }
+    return (
+      <StyledFormItem
+        expanded={expanded}
+        key={controlItem.name}
+        name={['filters', filterId, 'controlValues', controlItem.name]}
+        initialValue={initialValue}
+        label={
+          <StyledLabel>
+            {labelText}
+            {description && (
+              <>
+                &nbsp;
+                <InfoTooltip
+                  placement="top"
+                  tooltip={
+                    typeof description === 'function'
+                      ? description()
+                      : description
+                  }
+                />
+              </>
+            )}
+          </StyledLabel>
+        }
+      >
+        {input}
+      </StyledFormItem>
+    );
+  };
 
   controlItems
     .filter(
@@ -179,6 +261,14 @@ export default function getControlItemsMap({
         filterToEdit?.controlValues?.[controlItem.name] ??
         customizationToEdit?.controlValues?.[controlItem.name] ??
         controlItem?.config?.default;
+      const typed = typedControl(controlItem, initialValue);
+      if (typed) {
+        mapControlItems[controlItem.name] = {
+          element: typed,
+          checked: initialValue,
+        };
+        return;
+      }
       const element = (
         <>
           <CleanFormItem

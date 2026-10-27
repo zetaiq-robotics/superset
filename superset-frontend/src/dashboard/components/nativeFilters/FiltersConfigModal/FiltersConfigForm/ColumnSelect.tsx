@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: `fieldPath` binds the picker to a nested form field.
  */
 import { useCallback, useState, useMemo, useEffect } from 'react';
 import rison from 'rison';
@@ -41,6 +43,8 @@ interface ColumnSelectProps {
   filterValues?: (column: Column) => boolean;
   form: FormInstance<NativeFiltersForm>;
   formField?: keyof NativeFiltersFormItem;
+  /** Nested field under the filter instead of `formField`, e.g. ['controlValues', 'labelColumn']. */
+  fieldPath?: string[];
   filterId: string;
   datasetId?: number;
   datasourceType?: DatasourceType;
@@ -56,6 +60,7 @@ export function ColumnSelect({
   filterValues = () => true,
   form,
   formField = 'column',
+  fieldPath,
   filterId,
   datasetId,
   datasourceType,
@@ -68,9 +73,13 @@ export function ColumnSelect({
   const { addDangerToast } = useToasts();
   const resetColumnField = useCallback(() => {
     form.setFields([
-      { name: ['filters', filterId, formField], touched: false, value: null },
+      {
+        name: ['filters', filterId, ...(fieldPath ?? [formField])],
+        touched: false,
+        value: null,
+      },
     ]);
-  }, [form, filterId, formField]);
+  }, [form, filterId, formField, fieldPath]);
 
   const options = useMemo(
     () =>
