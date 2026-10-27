@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: {{Filter name}} in preview shows the filter's applied
+ * value, escaped as text.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo } from 'react';
@@ -39,6 +42,7 @@ import WithPopoverMenu from 'src/dashboard/components/menu/WithPopoverMenu';
 import type { LayoutItem } from 'src/dashboard/types';
 import type { DropResult } from 'src/dashboard/components/dnd/dragDroppableConfig';
 import { ROW_TYPE, COLUMN_TYPE } from 'src/dashboard/util/componentTypes';
+import { useFilterPlaceholders } from 'src/dashboard/util/filterPlaceholders';
 import {
   GRID_MIN_COLUMN_COUNT,
   GRID_MIN_ROW_UNITS,
@@ -343,19 +347,20 @@ function Markdown({
     [id, markdownSource, handleMarkdownChange, setEditor],
   );
 
+  const shownSource = useFilterPlaceholders(markdownSource, true);
   const renderPreviewMode = useMemo(
     () => (
       <SafeMarkdown
         source={
           hasError
             ? MARKDOWN_ERROR_MESSAGE
-            : markdownSource || MARKDOWN_PLACE_HOLDER
+            : shownSource || MARKDOWN_PLACE_HOLDER
         }
         htmlSanitization={htmlSanitization}
         htmlSchemaOverrides={htmlSchemaOverrides}
       />
     ),
-    [hasError, markdownSource, htmlSanitization, htmlSchemaOverrides],
+    [hasError, shownSource, htmlSanitization, htmlSchemaOverrides],
   );
 
   // inherit the size of parent columns

@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: {{Filter name}} in a title shows the filter's applied
+ * value outside edit mode.
  */
 import {
   forwardRef,
@@ -41,6 +44,7 @@ import {
 } from '@apache-superset/core/theme';
 import { useUiConfig } from 'src/components/UiConfigContext';
 import { isEmbedded } from 'src/dashboard/util/isEmbedded';
+import { useFilterPlaceholders } from 'src/dashboard/util/filterPlaceholders';
 import {
   Tooltip,
   EditableTitle,
@@ -208,6 +212,7 @@ const SliceHeader = forwardRef<HTMLDivElement, SliceHeaderProps>(
     const isCrossFiltersEnabled = useSelector<RootState, boolean>(
       ({ dashboardInfo }) => dashboardInfo.crossFiltersEnabled,
     );
+    const shownSliceName = useFilterPlaceholders(sliceName);
 
     const firstQueryResponse = useSelector<RootState, QueryData | undefined>(
       state => state.charts[slice.slice_id].queriesResponse?.[0],
@@ -290,7 +295,7 @@ const SliceHeader = forwardRef<HTMLDivElement, SliceHeaderProps>(
             <div>
               <EditableTitle
                 title={
-                  sliceName ||
+                  (editMode ? sliceName : shownSliceName) ||
                   (editMode
                     ? '---' // this makes an empty title clickable
                     : '')

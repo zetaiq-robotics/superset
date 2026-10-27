@@ -305,6 +305,31 @@ test('Should render title', () => {
   expect(screen.getByText('Vaccine Candidates per Phase')).toBeInTheDocument();
 });
 
+// ZetaIQ (variables spec G8)
+test('a {{Filter name}} title shows the applied value, raw in edit mode', () => {
+  const state = {
+    ...initialState,
+    nativeFilters: { filters: { 'NATIVE_FILTER-r': { name: 'Robot' } } },
+    dataMask: {
+      'NATIVE_FILTER-r': { filterState: { value: ['SB-012'], label: 'SB-012' } },
+    },
+  };
+  const props = createProps({ sliceName: 'Battery for {{Robot}}' });
+  const { unmount } = render(<SliceHeader {...props} />, {
+    useRedux: true,
+    useRouter: true,
+    initialState: state,
+  });
+  expect(screen.getByText('Battery for SB-012')).toBeInTheDocument();
+  unmount();
+  render(<SliceHeader {...props} editMode />, {
+    useRedux: true,
+    useRouter: true,
+    initialState: state,
+  });
+  expect(screen.getByText('Battery for {{Robot}}')).toBeInTheDocument();
+});
+
 test('Should render click to edit prompt and run onExploreChart on click', async () => {
   const props = createProps();
   const history = createMemoryHistory({
