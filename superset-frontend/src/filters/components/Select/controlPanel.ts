@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: optional label column control.
  */
 import { t } from '@apache-superset/core/translation';
 import { GenericDataType } from '@apache-superset/core/common';
@@ -80,6 +82,22 @@ const config: ControlPanelConfig = {
               ...sharedControls.groupby,
               label: t('Column'),
               required: true,
+            },
+          },
+        ],
+        [
+          {
+            // Modified by ZetaIQ: rendered as a dataset column picker by the
+            // filter config form (variables spec G7).
+            name: 'labelColumn',
+            config: {
+              type: 'ColumnSelectControl',
+              label: () => t('Label column'),
+              description: () =>
+                t(
+                  'Shown in the list instead of the value; the value column is still what is applied',
+                ),
+              renderTrigger: true,
             },
           },
         ],

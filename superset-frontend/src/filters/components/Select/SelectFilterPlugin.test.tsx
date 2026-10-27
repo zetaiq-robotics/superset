@@ -2316,6 +2316,51 @@ test('a parent change trims picks once the new options arrive, not before', () =
   expect(pushed[pushed.length - 1]).toBeNull();
 });
 
+// ZetaIQ (variables spec G7): a label column is shown, the value is applied.
+test('a label column labels the options and the applied value', async () => {
+  const setDataMask = jest.fn();
+  const props = transformProps(
+    new ChartProps({
+      ...selectMultipleProps,
+      formData: {
+        ...selectMultipleProps.formData,
+        groupby: ['robot'],
+        labelColumn: 'name',
+        defaultValue: undefined,
+      },
+      filterState: { value: [] },
+      queriesData: [
+        {
+          ...selectMultipleProps.queriesData[0],
+          colnames: ['robot', 'name'],
+          data: [
+            { robot: 'SB-001', name: 'SB-001 · Bay 3' },
+            { robot: 'SB-012', name: 'SB-012 · Bay 7' },
+          ],
+        },
+      ],
+      theme: supersetTheme,
+    }) as PluginFilterSelectChartProps,
+  );
+  render(
+    <SelectFilterPlugin
+      {...(props as PluginFilterSelectProps)}
+      appSection={AppSection.Dashboard}
+      isRefreshing={false}
+      setDataMask={setDataMask}
+      showOverflow={false}
+    />,
+  );
+  userEvent.click(screen.getByRole('combobox'));
+  userEvent.click(await screen.findByText('SB-012 · Bay 7'));
+  const last = setDataMask.mock.calls[setDataMask.mock.calls.length - 1][0];
+  expect(last.filterState.value).toEqual(['SB-012']);
+  expect(last.filterState.label).toBe('SB-012 · Bay 7');
+  expect(last.extraFormData.filters[0]).toEqual(
+    expect.objectContaining({ col: 'robot', val: ['SB-012'] }),
+  );
+});
+
 test('a truncated option list never drops picks', () => {
   const setDataMask = jest.fn();
   const { rerender } = render(

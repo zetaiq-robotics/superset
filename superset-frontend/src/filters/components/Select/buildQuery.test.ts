@@ -117,6 +117,27 @@ describe('Select buildQuery', () => {
     ]);
   });
 
+  // ZetaIQ (variables spec G7)
+  test('a label column is fetched beside the value column, search stays on the value', () => {
+    const queryContext = buildQuery(
+      { ...formData, labelColumn: 'my_label' },
+      {
+        ownState: {
+          search: 'abc',
+          coltypeMap: {
+            my_col: GenericDataType.String,
+            my_label: GenericDataType.String,
+          },
+        },
+      },
+    );
+    const [query] = queryContext.queries;
+    expect(query.columns).toEqual(['my_col', 'my_label']);
+    expect(query.filters).toEqual([
+      { col: 'my_col', op: 'ILIKE', val: '%abc%' },
+    ]);
+  });
+
   test('should not sort by the searched column', () => {
     // Ordering by a high-cardinality column makes the engine sort every match
     // before applying the row limit; the dropdown re-sorts the page anyway.

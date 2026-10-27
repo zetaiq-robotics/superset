@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: optional labelColumn.
  */
 import {
   AppSection,
@@ -50,6 +52,8 @@ export interface PluginFilterSelectCustomizeProps {
   sortAscending?: boolean;
   sortMetric?: string;
   operatorType?: SelectFilterOperatorType;
+  /** ZetaIQ: column shown in the list instead of the value; the value column is still applied. */
+  labelColumn?: string;
 }
 
 export type PluginFilterSelectQueryFormData = QueryFormData &
