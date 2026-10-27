@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a parent change drops child picks that left the options.
  */
 /* eslint-disable no-param-reassign */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -346,6 +348,35 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
       .join(' ');
   }, [creatable, data.length, rowLimit, searchAllOptions]);
 
+  // Modified by ZetaIQ: a parent change drops the picks it took out of this
+  // filter's options, as Grafana does for chained variables. Only when fresh
+  // options arrive for changed parents, and never on a list capped by the row
+  // limit or narrowed by a server-side search (a client-side search keeps its
+  // typed text after a pick, but the options stay the full list).
+  // Options are compared by value: `data` is a new array on every render, and
+  // the parents change a render before their options arrive.
+  const optionsFor = useRef<{ options: string; parents: string }>();
+  const keepAvailablePicks = (value: SelectValue): SelectValue => {
+    const parents = JSON.stringify(formData.extraFormData ?? {});
+    const listed = data.map(row => String(row[col]));
+    const options = listed.join('\u0001');
+    const prev = optionsFor.current;
+    if (prev?.options === options) return value;
+    optionsFor.current = { options, parents };
+    if (
+      !prev ||
+      prev.parents === parents ||
+      !Array.isArray(value) ||
+      (searchAllOptions && search) ||
+      (rowLimit && data.length >= rowLimit)
+    ) {
+      return value;
+    }
+    const available = new Set(listed);
+    const kept = value.filter(v => available.has(String(v)));
+    return kept.length ? kept : null;
+  };
+
   const formItemExtra = useMemo(() => {
     if (filterState.validateMessage) {
       return (
@@ -437,7 +468,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
 
     if (filterState.value !== undefined) {
       // Set the filter state value if it is defined
-      updateDataMask(filterState.value);
+      updateDataMask(keepAvailablePicks(filterState.value));
       return;
     }
 

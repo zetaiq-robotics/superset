@@ -2188,3 +2188,145 @@ test('renders dashboard select dropdown popup under document body', async () => 
 
   expect(dropdown?.parentElement).toBe(document.body);
 });
+
+// ZetaIQ (variables spec G2): a parent change drops child picks that are no longer options.
+const childProps = (
+  parentPick: string[],
+  rows: string[],
+  value: string[],
+  setDataMask: jest.Mock,
+  rowLimit = 1000,
+) =>
+  ({
+    ...transformProps(
+      new ChartProps({
+        ...selectMultipleProps,
+        formData: {
+          ...selectMultipleProps.formData,
+          groupby: ['robot'],
+          defaultValue: undefined,
+          rowLimit,
+          extraFormData: {
+            filters: [{ col: 'service', op: 'IN', val: parentPick }],
+          },
+        },
+        filterState: { value },
+        queriesData: [
+          {
+            ...selectMultipleProps.queriesData[0],
+            colnames: ['robot'],
+            data: rows.map(robot => ({ robot })),
+          },
+        ],
+        theme: supersetTheme,
+      }) as PluginFilterSelectChartProps,
+    ),
+    appSection: AppSection.Dashboard,
+    isRefreshing: false,
+    setDataMask,
+    showOverflow: false,
+  }) as PluginFilterSelectProps;
+
+const lastValue = (setDataMask: jest.Mock) =>
+  setDataMask.mock.calls[setDataMask.mock.calls.length - 1][0].filterState
+    .value;
+
+test('a parent change drops picks missing from the new options', () => {
+  const setDataMask = jest.fn();
+  const picks = ['SB-001', 'SB-012'];
+  const { rerender } = render(
+    <SelectFilterPlugin
+      {...childProps(['sorting-bot'], picks, picks, setDataMask)}
+    />,
+  );
+  rerender(
+    <SelectFilterPlugin
+      {...childProps(['wms'], ['SB-012', 'srv-01'], picks, setDataMask)}
+    />,
+  );
+  expect(lastValue(setDataMask)).toEqual(['SB-012']);
+});
+
+test('a parent change that leaves no pick clears the child', () => {
+  const setDataMask = jest.fn();
+  const { rerender } = render(
+    <SelectFilterPlugin
+      {...childProps(['sorting-bot'], ['SB-001'], ['SB-001'], setDataMask)}
+    />,
+  );
+  rerender(
+    <SelectFilterPlugin
+      {...childProps(['wms'], ['srv-01'], ['SB-001'], setDataMask)}
+    />,
+  );
+  expect(lastValue(setDataMask)).toBeNull();
+});
+
+test('new options with the same parents (a refresh) keep the picks', () => {
+  const setDataMask = jest.fn();
+  const { rerender } = render(
+    <SelectFilterPlugin
+      {...childProps(['sorting-bot'], ['SB-001'], ['SB-001'], setDataMask)}
+    />,
+  );
+  rerender(
+    <SelectFilterPlugin
+      {...childProps(['sorting-bot'], ['SB-012'], ['SB-001'], setDataMask)}
+    />,
+  );
+  expect(lastValue(setDataMask)).toEqual(['SB-001']);
+});
+
+// As in the filter bar: the parents change a render before their options
+// arrive, every render brings a new `data` array, and setDataMask feeds the
+// value back as filterState.
+test('a parent change trims picks once the new options arrive, not before', () => {
+  const pushed: unknown[] = [];
+  let setStep: (n: number) => void = () => {};
+  const Bar = () => {
+    const [step, setStepState] = useState(0);
+    setStep = setStepState;
+    const [filterState, setFilterState] = useState<any>({
+      value: ['SB-001'],
+    });
+    const parents = step === 0 ? ['sorting-bot'] : ['wms'];
+    const rows = step < 2 ? ['SB-001', 'SB-012'] : ['srv-01'];
+    const props = childProps(parents, rows, [], jest.fn());
+    return (
+      <SelectFilterPlugin
+        {...props}
+        filterState={filterState}
+        setDataMask={(dataMask: DataMask) => {
+          pushed.push(dataMask.filterState?.value);
+          setFilterState(dataMask.filterState);
+        }}
+      />
+    );
+  };
+  render(<Bar />);
+  // Typing to find a value leaves the search text behind; with a client-side
+  // search the options are still the full list, so the trim must still run.
+  userEvent.type(screen.getByRole('combobox'), 'SB-0');
+  act(() => {
+    jest.advanceTimersByTime(1000);
+  });
+  act(() => setStep(1));
+  expect(pushed[pushed.length - 1]).toEqual(['SB-001']);
+  act(() => setStep(2));
+  expect(pushed[pushed.length - 1]).toBeNull();
+});
+
+test('a truncated option list never drops picks', () => {
+  const setDataMask = jest.fn();
+  const { rerender } = render(
+    <SelectFilterPlugin
+      {...childProps(['sorting-bot'], ['SB-001'], ['SB-001'], setDataMask, 1)}
+    />,
+  );
+  rerender(
+    <SelectFilterPlugin
+      {...childProps(['wms'], ['srv-01'], ['SB-001'], setDataMask, 1)}
+    />,
+  );
+  expect(lastValue(setDataMask)).toEqual(['SB-001']);
+});
