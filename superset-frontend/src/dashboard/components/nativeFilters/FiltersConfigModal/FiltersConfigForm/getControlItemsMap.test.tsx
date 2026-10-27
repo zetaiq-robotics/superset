@@ -35,9 +35,9 @@ jest.mock('./utils', () => ({
 // Mock ColumnSelect to test filterValues logic
 jest.mock('./ColumnSelect', () => ({
   ColumnSelect: ({
-    filterValues,
+    filterValues = () => true,
   }: {
-    filterValues: (column: any) => boolean;
+    filterValues?: (column: any) => boolean;
   }) => {
     const columns = [
       { name: 'col1', filterable: true },
@@ -248,4 +248,60 @@ describe('ColumnSelect filterValues behavior', () => {
     expect(screen.queryByText('col3')).not.toBeInTheDocument();
     expect(screen.queryByText('col2')).not.toBeInTheDocument();
   });
+});
+
+// ZetaIQ (variables spec G4b): filter plugins may declare text, select and
+// column controls; they render by type and save under controlValues.
+test('a TextControl renders a text input that marks the form changed', () => {
+  const props = createProps();
+  (getControlItems as jest.Mock).mockReturnValue([
+    { name: 'onValue', config: { type: 'TextControl', label: 'On value', renderTrigger: true } },
+  ]);
+  renderControlItems(getControlItemsMap(props));
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  expect(screen.getByText('On value')).toBeInTheDocument();
+  userEvent.type(screen.getByRole('textbox'), 'yes');
+  expect(props.formChanged).toHaveBeenCalled();
+});
+
+test('a TextAreaControl renders a multi-line input', () => {
+  const props = createProps();
+  (getControlItems as jest.Mock).mockReturnValue([
+    { name: 'values', config: { type: 'TextAreaControl', label: 'Values', renderTrigger: true } },
+  ]);
+  const { container } = renderControlItems(getControlItemsMap(props));
+  expect(container.querySelector('textarea')).toBeInTheDocument();
+  expect(screen.getByText('Values')).toBeInTheDocument();
+});
+
+test('a SelectControl renders its choices', async () => {
+  const props = createProps();
+  (getControlItems as jest.Mock).mockReturnValue([
+    {
+      name: 'match',
+      config: {
+        type: 'SelectControl',
+        label: 'Match',
+        renderTrigger: true,
+        choices: [
+          ['contains', 'Contains'],
+          ['equals', 'Equals'],
+        ],
+      },
+    },
+  ]);
+  renderControlItems(getControlItemsMap(props));
+  userEvent.click(screen.getByRole('combobox'));
+  expect(await screen.findByText('Equals')).toBeInTheDocument();
+});
+
+test('a ColumnSelectControl renders the dataset column picker', () => {
+  (doesColumnMatchFilterType as jest.Mock).mockReturnValue(true);
+  const props = createProps();
+  (getControlItems as jest.Mock).mockReturnValue([
+    { name: 'labelColumn', config: { type: 'ColumnSelectControl', label: 'Label column', renderTrigger: true } },
+  ]);
+  renderControlItems(getControlItemsMap(props));
+  expect(screen.getByText('Label column')).toBeInTheDocument();
+  expect(screen.getByText('col1')).toBeInTheDocument();
 });
