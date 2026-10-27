@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a native filter re-runs only the charts it can affect.
  */
 import { ReactNode, useCallback, useContext, useEffect, useRef } from 'react';
 import { t } from '@apache-superset/core/translation';
@@ -51,6 +53,7 @@ import type {
 } from '@superset-ui/core';
 import { getAffectedOwnDataCharts } from '../util/charts/getOwnDataCharts';
 import { getRelatedCharts } from '../util/getRelatedCharts';
+import { chartsUsingFilter } from '../util/chartsUsingFilter';
 
 type RelatedChartsFilter =
   | AppliedNativeFilterType
@@ -114,6 +117,7 @@ function Dashboard({
   slices,
   activeFilters,
   chartConfiguration,
+  datasources,
   ownDataCharts,
   layout,
   children,
@@ -153,6 +157,18 @@ function Dashboard({
       appliedOwnDataChartsRef.current,
     );
 
+    // A native filter's value change re-runs only the charts it can affect.
+    const usingFilter = (filterKey: string, ids: number[]): number[] =>
+      filterKey.startsWith('NATIVE_FILTER')
+        ? chartsUsingFilter(
+            ids,
+            activeFilters[filterKey]?.values,
+            appliedFilters[filterKey]?.values,
+            slices,
+            datasources ?? {},
+          )
+        : ids;
+
     [...allKeys].forEach(filterKey => {
       if (
         !currFilterKeys.includes(filterKey) &&
@@ -160,19 +176,25 @@ function Dashboard({
       ) {
         // filterKey is removed?
         affectedChartIds.push(
-          ...getRelatedCharts(
+          ...usingFilter(
             filterKey,
-            appliedFilters[filterKey] as unknown as RelatedChartsFilter,
-            slices,
+            getRelatedCharts(
+              filterKey,
+              appliedFilters[filterKey] as unknown as RelatedChartsFilter,
+              slices,
+            ),
           ),
         );
       } else if (!appliedFilterKeys.includes(filterKey)) {
         // filterKey is newly added?
         affectedChartIds.push(
-          ...getRelatedCharts(
+          ...usingFilter(
             filterKey,
-            activeFilters[filterKey] as unknown as RelatedChartsFilter,
-            slices,
+            getRelatedCharts(
+              filterKey,
+              activeFilters[filterKey] as unknown as RelatedChartsFilter,
+              slices,
+            ),
           ),
         );
       } else {
@@ -188,10 +210,13 @@ function Dashboard({
           )
         ) {
           affectedChartIds.push(
-            ...getRelatedCharts(
+            ...usingFilter(
               filterKey,
-              activeFilters[filterKey] as unknown as RelatedChartsFilter,
-              slices,
+              getRelatedCharts(
+                filterKey,
+                activeFilters[filterKey] as unknown as RelatedChartsFilter,
+                slices,
+              ),
             ),
           );
         }
@@ -216,7 +241,7 @@ function Dashboard({
     refreshCharts([...new Set(affectedChartIds)]);
     appliedFiltersRef.current = activeFilters;
     appliedOwnDataChartsRef.current = ownDataCharts;
-  }, [activeFilters, ownDataCharts, slices, refreshCharts]);
+  }, [activeFilters, ownDataCharts, slices, datasources, refreshCharts]);
 
   const applyCharts = useCallback((): void => {
     if (!chartConfiguration) {
