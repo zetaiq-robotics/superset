@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: a parent change drops child picks that left the options.
+ * Modified by ZetaIQ: a parent change drops child picks that left the options;
+ * an optional label column names each value.
  */
 /* eslint-disable no-param-reassign */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -193,6 +194,23 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
       }),
     [data, col],
   );
+  // Modified by ZetaIQ: an optional label column names each value.
+  const labelOf = useMemo(() => {
+    const labels = new Map<unknown, string>();
+    const { labelColumn } = formData;
+    if (labelColumn) {
+      data.forEach(row => {
+        if (!labels.has(row[col]) && row[labelColumn] != null) {
+          labels.set(row[col], String(row[labelColumn]));
+        }
+      });
+    }
+    return labels;
+  }, [data, col, formData.labelColumn]);
+  const optionLabel = useCallback(
+    (value: any) => labelOf.get(value) ?? labelFormatter(value, datatype),
+    [labelOf, labelFormatter, datatype],
+  );
   const [excludeFilterValues, setExcludeFilterValues] = useState(
     isUndefined(filterState?.excludeFilterValues)
       ? true
@@ -251,9 +269,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
         filterState: {
           ...filterState,
           label: values?.length
-            ? `${(values || [])
-                .map(value => labelFormatter(value, datatype))
-                .join(', ')}${suffix}`
+            ? `${(values || []).map(optionLabel).join(', ')}${suffix}`
             : undefined,
           value:
             appSection === AppSection.FilterConfigModal && defaultToFirstItem
@@ -275,7 +291,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
       excludeFilterValues,
       operatorType,
       JSON.stringify(filterState),
-      labelFormatter,
+      optionLabel,
     ],
   );
 
@@ -391,7 +407,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
   const uniqueOptions = useMemo(() => {
     const allOptions = new Set(data.map(el => el[col]));
     const baseOptions = [...allOptions].map((value: string) => ({
-      label: labelFormatter(value, datatype),
+      label: optionLabel(value),
       value,
       isNewOption: false,
     }));
@@ -403,7 +419,7 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
         });
     }
     return baseOptions;
-  }, [data, datatype, col, labelFormatter, creatable, filterState.value]);
+  }, [data, col, optionLabel, creatable, filterState.value]);
 
   const options = useMemo(() => {
     const unquotedSearch = stripSurroundingQuotes(search);

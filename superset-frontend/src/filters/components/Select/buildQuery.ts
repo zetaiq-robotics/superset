@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: an optional label column is fetched beside the value.
  */
 import {
   buildQueryContext,
@@ -32,12 +34,20 @@ const buildQuery: BuildQuery<PluginFilterSelectQueryFormData> = (
   options,
 ) => {
   const { search, coltypeMap } = options?.ownState || {};
-  const { sortAscending, sortMetric } = { ...DEFAULT_FORM_DATA, ...formData };
+  const { sortAscending, sortMetric, labelColumn } = {
+    ...DEFAULT_FORM_DATA,
+    ...formData,
+  };
   return buildQueryContext(formData, baseQueryObject => {
-    const { columns = [], filters = [] } = baseQueryObject;
+    const { columns: valueColumns = [], filters = [] } = baseQueryObject;
+    // Search and sort stay on the value column; the label only rides along.
+    const columns =
+      labelColumn && !valueColumns.includes(labelColumn)
+        ? [...valueColumns, labelColumn]
+        : valueColumns;
     const extraFilters: QueryObjectFilterClause[] = [];
     if (search) {
-      columns.filter(isPhysicalColumn).forEach(column => {
+      valueColumns.filter(isPhysicalColumn).forEach(column => {
         const label = getColumnLabel(column);
         if (
           coltypeMap[label] === GenericDataType.String ||
@@ -53,7 +63,7 @@ const buildQuery: BuildQuery<PluginFilterSelectQueryFormData> = (
       });
     }
 
-    const sortColumns = sortMetric ? [sortMetric] : columns;
+    const sortColumns = sortMetric ? [sortMetric] : valueColumns;
     // Sorting by the searched column makes the engine scan and sort every
     // match before applying the row limit, which is the dominant cost of
     // search-as-you-type on a high-cardinality column. The dropdown re-sorts
