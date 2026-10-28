@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a chart opened from a dashboard is saved to that dashboard only.
  */
 /* eslint camelcase: 0 */
 import {
@@ -801,9 +803,11 @@ const SaveModal = ({
         label={t('Add to dashboard')}
         data-test="save-chart-modal-select-dashboard-form"
       >
+        {/* Modified by ZetaIQ: opened from a dashboard, the chart is saved there only. */}
         <AsyncSelect
-          allowClear
-          allowNewOptions
+          allowClear={!dashboardIdProp}
+          allowNewOptions={!dashboardIdProp}
+          disabled={!!dashboardIdProp}
           ariaLabel={t('Select a dashboard')}
           options={loadDashboards}
           onChange={onDashboardChange}

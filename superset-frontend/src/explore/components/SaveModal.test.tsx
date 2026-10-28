@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for saving a chart opened from a dashboard to that dashboard only.
  */
 import configureStore from 'redux-mock-store';
 import thunk from 'redux-thunk';
@@ -59,15 +61,21 @@ jest.mock('@superset-ui/core/components/Select', () => ({
     onChange,
     options,
     value,
+    disabled,
+    allowNewOptions,
   }: {
     onChange: (val: SelectValue) => void;
     options?: SelectOptionsPagePromise;
     value?: { label?: string } | null;
+    disabled?: boolean;
+    allowNewOptions?: boolean;
   }) => {
     mockLoadDashboards = options;
     return (
       <input
         data-test="mock-async-select"
+        disabled={disabled}
+        data-allow-new={String(!!allowNewOptions)}
         // Surfaces the currently selected label so tests can assert on what
         // the user actually sees, rather than only on side-effect requests.
         value={value?.label ?? ''}
@@ -349,6 +357,46 @@ test('does not preselect an externally managed dashboard on mount', async () => 
   expect(
     fetchMock.callHistory.calls(`glob:*/api/v1/dashboard/${dashboardId}/tabs`),
   ).toHaveLength(0);
+});
+
+// ZetaIQ: a chart created or edited from a dashboard is saved to that dashboard only.
+test('locks the dashboard picker to the dashboard Explore was opened from', async () => {
+  const dashboardId = 1;
+  fetchMock.removeRoutes();
+  fetchMock.get(fetchChartEndpoint, { id: 1, dashboards: [] });
+  fetchMock.get(`glob:*/api/v1/dashboard/${dashboardId}/tabs`, {
+    result: { tab_tree: [] },
+  });
+  fetchMock.get(`glob:*/api/v1/dashboard/${dashboardId}`, {
+    result: {
+      id: dashboardId,
+      dashboard_title: 'Fleet health',
+      owners: [{ id: 1 }],
+    },
+  });
+  const admin = {
+    userId: 1,
+    username: 'admin',
+    isActive: true,
+    permissions: {},
+    roles: { Admin: [['can_write', 'Dashboard']] },
+  };
+  const { getByTestId } = setup(
+    { ...defaultProps, dashboardId },
+    mockStore({ ...initialState, user: admin }),
+  );
+
+  const select = getByTestId('mock-async-select') as HTMLInputElement;
+  await waitFor(() => expect(select.value).toBe('Fleet health'));
+  expect(select).toBeDisabled();
+  expect(select).toHaveAttribute('data-allow-new', 'false');
+});
+
+test('leaves the dashboard picker open when Explore was not opened from a dashboard', () => {
+  const { getByTestId } = setup();
+  const select = getByTestId('mock-async-select');
+  expect(select).not.toBeDisabled();
+  expect(select).toHaveAttribute('data-allow-new', 'true');
 });
 
 test('loadDashboards includes is_managed_externally filter', async () => {
