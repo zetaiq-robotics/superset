@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the collapsing builder pane.
  */
 // Imported first: loading this before 'spec/helpers/testing-library' or
 // '@superset-ui/core' ensures mockAntdWithDesktopBreakpoint is defined
@@ -105,8 +107,20 @@ jest.mock(
   },
 );
 jest.mock('src/dashboard/components/BuilderComponentPane', () => {
-  const MockBuilderComponentPane = () => (
-    <div data-test="mock-builder-component-pane" />
+  const MockBuilderComponentPane = ({
+    isOpen,
+    onToggle,
+  }: {
+    isOpen?: boolean;
+    onToggle?: () => void;
+  }) => (
+    <button
+      type="button"
+      aria-label="Toggle panel"
+      data-test="mock-builder-component-pane"
+      data-open={String(isOpen)}
+      onClick={onToggle}
+    />
   );
   MockBuilderComponentPane.displayName = 'MockBuilderComponentPane';
   return MockBuilderComponentPane;
@@ -607,6 +621,21 @@ describe('DashboardBuilder', () => {
     });
     const builderComponents = queryAllByTestId('mock-builder-component-pane');
     expect(builderComponents.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ZetaIQ: collapsing the builder pane hands its width to the grid.
+  test('collapsing the builder pane widens the grid', () => {
+    const { getByTestId, container } = setup({
+      dashboardState: { ...mockState.dashboardState, editMode: true },
+    });
+    const pane = getByTestId('mock-builder-component-pane');
+    const grid = container.querySelector('.grid-container');
+    expect(pane).toHaveAttribute('data-open', 'true');
+    expect(grid).toHaveStyle('max-width: calc(100% - 438px)');
+
+    fireEvent.click(pane);
+    expect(pane).toHaveAttribute('data-open', 'false');
+    expect(grid).toHaveStyle('max-width: calc(100% - 96px)');
   });
 
   test('should change redux state if a top-level Tab is clicked', async () => {

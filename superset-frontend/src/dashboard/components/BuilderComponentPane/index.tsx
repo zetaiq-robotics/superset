@@ -15,13 +15,17 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the pane collapses to a strip so the whole dashboard is visible.
  */
 /* eslint-env browser */
 import tinycolor from 'tinycolor2';
 import Tabs from '@superset-ui/core/components/Tabs';
+import { Icons } from '@superset-ui/core/components/Icons';
 import { t } from '@apache-superset/core/translation';
 import { css, SupersetTheme } from '@apache-superset/core/theme';
 import SliceAdder from 'src/dashboard/containers/SliceAdder';
+import { BUILDER_SIDEPANEL_CLOSED_WIDTH } from 'src/dashboard/constants';
 import dashboardComponents from 'src/visualizations/presets/dashboardComponents';
 import NewColumn from '../gridComponents/new/NewColumn';
 import NewDivider from '../gridComponents/new/NewDivider';
@@ -38,7 +42,45 @@ const TABS_KEYS = {
   LAYOUT_ELEMENTS: 'LAYOUT_ELEMENTS',
 };
 
-const BuilderComponentPane = ({ topOffset = 0 }) => (
+const PaneToggle = ({
+  label,
+  rotate,
+  onClick,
+}: {
+  label: string;
+  rotate: number;
+  onClick?: () => void;
+}) => (
+  <button
+    type="button"
+    aria-label={label}
+    title={label}
+    onClick={onClick}
+    css={(theme: SupersetTheme) => css`
+      appearance: none;
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: ${theme.sizeUnit * 2}px;
+    `}
+  >
+    <Icons.VerticalAlignTopOutlined
+      iconSize="l"
+      css={{ transform: `rotate(${rotate}deg)` }}
+    />
+  </button>
+);
+
+// Collapsed, the tabs stay mounted (hidden) so the chart search survives.
+const BuilderComponentPane = ({
+  topOffset = 0,
+  isOpen = true,
+  onToggle,
+}: {
+  topOffset?: number;
+  isOpen?: boolean;
+  onToggle?: () => void;
+}) => (
   <div
     data-test="dashboard-builder-sidepane"
     css={css`
@@ -46,26 +88,42 @@ const BuilderComponentPane = ({ topOffset = 0 }) => (
       right: 0;
       top: ${topOffset}px;
       height: calc(100vh - ${topOffset}px);
-      width: ${BUILDER_PANE_WIDTH}px;
+      width: ${isOpen ? BUILDER_PANE_WIDTH : BUILDER_SIDEPANEL_CLOSED_WIDTH}px;
     `}
   >
     <div
       css={(theme: SupersetTheme) => css`
         position: absolute;
         height: 100%;
-        width: ${BUILDER_PANE_WIDTH}px;
+        width: ${isOpen ? BUILDER_PANE_WIDTH : BUILDER_SIDEPANEL_CLOSED_WIDTH}px;
         box-shadow: -${theme.sizeUnit}px 0 ${theme.sizeUnit}px 0
           ${tinycolor(theme.colorBorder).setAlpha(0.1).toRgbString()};
         background-color: ${theme.colorBgBase};
       `}
     >
+      {!isOpen && (
+        <PaneToggle label={t('Expand panel')} rotate={-90} onClick={onToggle} />
+      )}
       <Tabs
         data-test="dashboard-builder-component-pane-tabs-navigation"
         id="tabs"
+        hidden={!isOpen}
+        tabBarExtraContent={
+          onToggle && (
+            <PaneToggle
+              label={t('Collapse panel')}
+              rotate={90}
+              onClick={onToggle}
+            />
+          )
+        }
         css={(theme: SupersetTheme) => css`
           line-height: inherit;
           margin-top: ${theme.sizeUnit * 2}px;
           height: 100%;
+          &[hidden] {
+            display: none;
+          }
 
           & .ant-tabs-body-holder {
             height: 100%;

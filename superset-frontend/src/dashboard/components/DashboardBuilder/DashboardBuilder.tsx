@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the builder pane collapses and the grid takes its width.
  */
 /* eslint-env browser */
 import cx from 'classnames';
@@ -77,6 +79,7 @@ import { useUiConfig } from 'src/components/UiConfigContext';
 import { isMobileConsumptionEnabled, useIsMobile } from 'src/hooks/useIsMobile';
 import ResizableSidebar from 'src/components/ResizableSidebar';
 import {
+  BUILDER_SIDEPANEL_CLOSED_WIDTH,
   BUILDER_SIDEPANEL_WIDTH,
   CLOSED_FILTER_BAR_WIDTH,
   FILTER_BAR_HEADER_HEIGHT,
@@ -402,8 +405,9 @@ const StyledDashboardContent = styled.div<{
   editMode: boolean;
   marginLeft: number;
   previewGated: boolean;
+  sidepaneWidth: number;
 }>`
-  ${({ theme, editMode, marginLeft, previewGated }) => css`
+  ${({ theme, editMode, marginLeft, previewGated, sidepaneWidth }) => css`
     background-color: ${theme.colorBgLayout};
     display: flex;
     flex-direction: row;
@@ -443,9 +447,7 @@ const StyledDashboardContent = styled.div<{
       ${
         editMode &&
         `
-      max-width: calc(100% - ${
-        BUILDER_SIDEPANEL_WIDTH + theme.sizeUnit * 16
-      }px);
+      max-width: calc(100% - ${sidepaneWidth + theme.sizeUnit * 16}px);
     `
       }
 
@@ -540,6 +542,11 @@ const DashboardBuilder = () => {
   const isNotMobile =
     !isMobileViewport || standaloneMode !== DashboardStandaloneMode.None;
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [builderPaneOpen, setBuilderPaneOpen] = useState(true);
+  const toggleBuilderPane = useCallback(
+    () => setBuilderPaneOpen(open => !open),
+    [],
+  );
 
   // Reset the drawer's open state when leaving mobile mode so it doesn't
   // reopen unexpectedly if the viewport later shrinks back below the
@@ -983,6 +990,11 @@ const DashboardBuilder = () => {
             data-test="dashboard-grid-gate"
             aria-disabled={isVersionPreviewActive}
             previewGated={isVersionPreviewActive}
+            sidepaneWidth={
+              builderPaneOpen
+                ? BUILDER_SIDEPANEL_WIDTH
+                : BUILDER_SIDEPANEL_CLOSED_WIDTH
+            }
             onKeyDownCapture={event => {
               if (!isVersionPreviewActive) {
                 return;
@@ -1051,7 +1063,13 @@ const DashboardBuilder = () => {
             ) : (
               <Loading />
             )}
-            {editMode && <BuilderComponentPane topOffset={barTopOffset} />}
+            {editMode && (
+              <BuilderComponentPane
+                topOffset={barTopOffset}
+                isOpen={builderPaneOpen}
+                onToggle={toggleBuilderPane}
+              />
+            )}
           </StyledDashboardContent>
         </DashboardContentWrapper>
       </StyledContent>

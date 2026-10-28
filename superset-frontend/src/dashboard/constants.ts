@@ -18,6 +18,8 @@ import { DASHBOARD_ROOT_ID } from './util/constants';
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: width of the collapsed dashboard builder pane.
  */
 export const PLACEHOLDER_DATASOURCE: Datasource = {
   id: 0,
@@ -41,6 +43,7 @@ export const OPEN_FILTER_BAR_MAX_WIDTH = 550;
 export const FILTER_BAR_HEADER_HEIGHT = 80;
 export const FILTER_BAR_TABS_HEIGHT = 46;
 export const BUILDER_SIDEPANEL_WIDTH = 374;
+export const BUILDER_SIDEPANEL_CLOSED_WIDTH = 32;
 export const OVERWRITE_INSPECT_FIELDS = ['css', 'json_metadata.filter_scopes'];
 export const EMPTY_CONTAINER_Z_INDEX = 10;
 // A grid component's hover menu floats outside the component's own box, so it
