@@ -16,7 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { useRef, ReactNode, useMemo } from 'react';
+import {
+  useRef,
+  ReactNode,
+  useMemo,
+  forwardRef,
+  type ComponentProps,
+} from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { t } from '@apache-superset/core/translation';
@@ -192,9 +198,16 @@ export const DndLabelsContainer = styled.div<{
   }
 `;
 
-export const AddControlLabel = styled.div<{
+// Modified by ZetaIQ: a real button (keyboard-reachable; type="button" so it never submits a form).
+// A drop-only zone renders it `as="div"` (chart builder spec §7.1, F2).
+const AddControlLabelBase = styled.button<{
   cancelHover?: boolean;
 }>`
+  appearance: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  margin: 0;
   display: flex;
   align-items: center;
   width: 100%;
@@ -218,7 +231,17 @@ export const AddControlLabel = styled.div<{
   svg {
     margin-right: ${({ theme }) => theme.sizeUnit}px;
   }
+
+  :disabled {
+    cursor: not-allowed;
+    color: ${({ theme }) => theme.colorTextDisabled};
+  }
 `;
+
+export const AddControlLabel = forwardRef<
+  HTMLButtonElement,
+  ComponentProps<typeof AddControlLabelBase>
+>((props, ref) => <AddControlLabelBase type="button" ref={ref} {...props} />);
 
 export const AddIconButton = styled.button`
   display: flex;

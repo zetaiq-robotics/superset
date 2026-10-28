@@ -82,6 +82,34 @@ test('Handles ghost button click', () => {
   expect(defaultProps.onClickGhostButton).toHaveBeenCalled();
 });
 
+// Modified by ZetaIQ: the ghost "click" target is keyboard-reachable (chart builder spec §7.1, F2).
+test('ghost button is a focusable button that Enter activates', () => {
+  const onClickGhostButton = jest.fn();
+  render(
+    <DndSelectLabel
+      {...defaultProps}
+      onClickGhostButton={onClickGhostButton}
+    />,
+    { useDndKit: true },
+  );
+  const button = screen.getByRole('button', {
+    name: /drop columns here or click/i,
+  });
+  button.focus();
+  expect(button).toHaveFocus();
+  userEvent.type(button, '{enter}', { skipClick: true });
+  expect(onClickGhostButton).toHaveBeenCalledTimes(1);
+});
+
+test('a drop-only zone has no button', () => {
+  render(<DndSelectLabel {...defaultProps} onClickGhostButton={undefined} />, {
+    useDndKit: true,
+  });
+  expect(
+    screen.queryByRole('button', { name: /drop columns here or click/i }),
+  ).not.toBeInTheDocument();
+});
+
 test('updates dropValidator on changes', () => {
   const { getByTestId, rerender } = render(
     <ExploreContainer>

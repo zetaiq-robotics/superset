@@ -161,6 +161,8 @@ export default function DndSelectLabel({
   function renderGhostButton() {
     return (
       <AddControlLabel
+        // Modified by ZetaIQ: a drop-only zone (no click action) is not a button (chart builder spec F2).
+        as={props.onClickGhostButton ? undefined : 'div'}
         cancelHover={!props.onClickGhostButton}
         onClick={props.onClickGhostButton}
       >

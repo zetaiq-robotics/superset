@@ -16,7 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { render, screen, waitFor } from 'spec/helpers/testing-library';
+import {
+  render,
+  screen,
+  userEvent,
+  waitFor,
+} from 'spec/helpers/testing-library';
 import {
   OptionControlLabel,
   DragContainer,
@@ -146,6 +151,30 @@ test('renders DndLabelsContainer', () => {
 test('renders AddControlLabel', () => {
   const { container } = render(<AddControlLabel />);
   expect(container).toBeInTheDocument();
+});
+
+// Modified by ZetaIQ: keyboard-reachable add target (chart builder spec §7.1, F2).
+test('AddControlLabel is a focusable button that never submits a form', () => {
+  const onClick = jest.fn();
+  render(<AddControlLabel onClick={onClick}>Add metric</AddControlLabel>);
+  const button = screen.getByRole('button', { name: 'Add metric' });
+  expect(button).toHaveAttribute('type', 'button');
+  button.focus();
+  expect(button).toHaveFocus();
+  userEvent.type(button, '{enter}', { skipClick: true });
+  userEvent.type(button, '{space}', { skipClick: true });
+  expect(onClick).toHaveBeenCalledTimes(2);
+});
+
+test('a disabled AddControlLabel ignores clicks', () => {
+  const onClick = jest.fn();
+  render(
+    <AddControlLabel onClick={onClick} disabled>
+      Add metric
+    </AddControlLabel>,
+  );
+  userEvent.click(screen.getByRole('button', { name: 'Add metric' }));
+  expect(onClick).not.toHaveBeenCalled();
 });
 
 test('renders AddIconButton', () => {
