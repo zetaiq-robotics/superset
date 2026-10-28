@@ -25,7 +25,9 @@ import {
   getChartMetadataRegistry,
   ChartMetadata,
   VizType,
+  getExtensionsRegistry,
 } from '@superset-ui/core';
+import type { ExploreDatasourcePanelProps } from '@superset-ui/core';
 import { QUERY_MODE_REQUISITES } from 'src/explore/constants';
 import { MemoryRouter, Route, Router } from 'react-router-dom';
 import type { RouteComponentProps } from 'react-router-dom';
@@ -1405,4 +1407,35 @@ test('automatic axis title margin adjustment handles both X and Y axis titles be
     getChartControlPanelRegistry().remove('table');
     jest.restoreAllMocks();
   }
+});
+
+// Modified by ZetaIQ: explore.datasource.panel extension (chart builder spec §8, F1).
+test('renders the registered datasource panel with the stock props', async () => {
+  const seen: ExploreDatasourcePanelProps[] = [];
+  const Panel = (props: ExploreDatasourcePanelProps) => {
+    seen.push(props);
+    return <div data-test="custom-datasource-panel" />;
+  };
+  getExtensionsRegistry().set('explore.datasource.panel', Panel);
+  try {
+    renderWithRouter();
+    expect(
+      await screen.findByTestId('custom-datasource-panel'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('datasource-panel')).not.toBeInTheDocument();
+    const props = seen[seen.length - 1];
+    expect(props.datasource).toBeDefined();
+    expect(props.controls).toBeDefined();
+    expect(props.actions).toBeDefined();
+    expect(props.formData).toBeDefined();
+    expect(typeof props.width).toBe('number');
+    expect(props.Fallback).toBeDefined();
+  } finally {
+    getExtensionsRegistry().set('explore.datasource.panel', undefined);
+  }
+});
+
+test('renders the stock DataSourcePanel when nothing is registered', async () => {
+  renderWithRouter();
+  expect(await screen.findByTestId('datasource-panel')).toBeInTheDocument();
 });

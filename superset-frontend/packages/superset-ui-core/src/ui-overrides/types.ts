@@ -245,6 +245,20 @@ export interface ExploreChartHeaderProps {
   triggerQuery: boolean;
 }
 
+// Modified by ZetaIQ: an extension can replace Explore's datasource panel (chart builder spec §8, F1).
+export interface ExploreDatasourcePanelBaseProps {
+  formData: QueryFormData;
+  datasource: unknown;
+  controls: unknown;
+  actions: unknown;
+  width: number;
+}
+
+export interface ExploreDatasourcePanelProps extends ExploreDatasourcePanelBaseProps {
+  /** The stock panel, for charts the extension doesn't handle. */
+  Fallback: ComponentType<ExploreDatasourcePanelBaseProps>;
+}
+
 export type Extensions = Partial<{
   'alertsreports.header.icon': ComponentType;
   'load.drillby.options': LoadDrillByOptions;
@@ -282,4 +296,5 @@ export type Extensions = Partial<{
   ][];
   'filter.dateFilterControl': ComponentType<DateFilterControlProps>;
   'explore.chart.header': ComponentType<ExploreChartHeaderProps>;
+  'explore.datasource.panel': ComponentType<ExploreDatasourcePanelProps>;
 }>;

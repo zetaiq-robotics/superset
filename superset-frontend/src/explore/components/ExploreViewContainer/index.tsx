@@ -42,7 +42,9 @@ import {
   MatrixifyFormData,
   DatasourceType,
   ensureIsArray,
+  getExtensionsRegistry,
 } from '@superset-ui/core';
+import type { ExploreDatasourcePanelBaseProps } from '@superset-ui/core';
 import {
   ControlStateMapping,
   ControlPanelState,
@@ -433,6 +435,10 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
   );
 
   const theme = useTheme();
+  // Modified by ZetaIQ: an extension may replace the datasource panel (it gets the stock one as Fallback).
+  const DatasourcePanelExtension = getExtensionsRegistry().get(
+    'explore.datasource.panel',
+  );
 
   // Capture original title before any effects run
   const originalTitle = useMemo(() => document.title, []);
@@ -1140,13 +1146,26 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
             {...(isChartVersionPreviewActive ? { inert: '' } : {})}
           >
             {/* eslint-disable @typescript-eslint/no-explicit-any -- DataSourcePanel uses narrower types that are compatible at runtime */}
-            <DataSourcePanel
-              formData={props.form_data}
-              datasource={props.datasource as any}
-              controls={props.controls as any}
-              actions={props.actions as any}
-              width={width}
-            />
+            {DatasourcePanelExtension ? (
+              <DatasourcePanelExtension
+                formData={props.form_data}
+                datasource={props.datasource}
+                controls={props.controls}
+                actions={props.actions}
+                width={width}
+                Fallback={
+                  DataSourcePanel as unknown as ComponentType<ExploreDatasourcePanelBaseProps>
+                }
+              />
+            ) : (
+              <DataSourcePanel
+                formData={props.form_data}
+                datasource={props.datasource as any}
+                controls={props.controls as any}
+                actions={props.actions as any}
+                width={width}
+              />
+            )}
             {/* eslint-enable @typescript-eslint/no-explicit-any */}
           </div>
         </Resizable>
