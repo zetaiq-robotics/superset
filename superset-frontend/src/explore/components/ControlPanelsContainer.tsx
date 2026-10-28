@@ -587,6 +587,8 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
           isVisible={isVisible}
           hidden={isHidden}
           {...restProps}
+          // The control state carries a `hidden` function too; its evaluated value must win.
+          {...(typeof hidden === 'function' && { hidden: isHidden })}
         />
       </StashFormDataContainer>
     );

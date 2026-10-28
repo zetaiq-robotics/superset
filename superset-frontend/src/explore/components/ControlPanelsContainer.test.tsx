@@ -311,6 +311,41 @@ describe('ControlPanelsContainer', () => {
     expect(screen.getByText('Calculation type')).not.toBeVisible();
   });
 
+  test('a hidden function that returns false shows the control', async () => {
+    // Explore builds each control's state from its config, so the state carries the `hidden` function too.
+    const config = {
+      type: 'SelectControl',
+      label: t('Range label'),
+      choices: [],
+      hidden: () => false,
+    };
+    getChartControlPanelRegistry().remove('table');
+    getChartControlPanelRegistry().registerValue('table', {
+      controlPanelSections: [
+        {
+          label: t('Query'),
+          expanded: true,
+          controlSetRows: [[{ name: 'comparison_range_label', config }]],
+        },
+      ],
+    });
+    const props = getDefaultProps();
+    render(
+      <ControlPanelsContainer
+        {...props}
+        controls={
+          {
+            ...props.controls,
+            comparison_range_label: { ...config, value: null },
+          } as ControlPanelsContainerProps['controls']
+        }
+      />,
+      { useRedux: true },
+    );
+
+    expect(screen.getByText('Range label')).toBeVisible();
+  });
+
   test('should stay on Matrixify tab when matrixify is enabled', async () => {
     // Enable Matrixify feature flag
     mockIsFeatureEnabled.mockImplementation(
