@@ -346,6 +346,49 @@ describe('ControlPanelsContainer', () => {
     expect(screen.getByText('Range label')).toBeVisible();
   });
 
+  test('a dataset change on a chart builder chart shows no "keep control settings" alert', () => {
+    // The builder (form_data.zeta) moves the chart between its datasets on a signal switch and says itself what
+    // carried over; Superset's alert repeated that, and its "Clear form" wiped the builder block.
+    HTMLElement.prototype.scrollTo = jest.fn(); // jsdom has none; the alert scrolls the panel up
+    const props = getDefaultProps();
+    const at = (id: number, zeta: unknown) =>
+      ({
+        ...props,
+        exploreState: {
+          datasource: { id, type: 'table' },
+          form_data: { zeta },
+        },
+      }) as unknown as ControlPanelsContainerProps;
+    const { rerender } = render(
+      <ControlPanelsContainer {...at(21, { signal: 'metrics' })} />,
+      { useRedux: true },
+    );
+    rerender(<ControlPanelsContainer {...at(1, { signal: 'logs' })} />);
+    expect(
+      screen.queryByText('Keep control settings?'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('No form settings were maintained'),
+    ).not.toBeInTheDocument();
+  });
+
+  test('a dataset change on a stock chart still shows the alert', () => {
+    HTMLElement.prototype.scrollTo = jest.fn();
+    const props = getDefaultProps();
+    const at = (id: number) =>
+      ({
+        ...props,
+        exploreState: { datasource: { id, type: 'table' }, form_data: {} },
+      }) as unknown as ControlPanelsContainerProps;
+    const { rerender } = render(<ControlPanelsContainer {...at(21)} />, {
+      useRedux: true,
+    });
+    rerender(<ControlPanelsContainer {...at(1)} />);
+    expect(
+      screen.getByText('No form settings were maintained'),
+    ).toBeInTheDocument();
+  });
+
   test('should stay on Matrixify tab when matrixify is enabled', async () => {
     // Enable Matrixify feature flag
     mockIsFeatureEnabled.mockImplementation(

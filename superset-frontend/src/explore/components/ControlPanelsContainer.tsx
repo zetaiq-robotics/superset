@@ -427,7 +427,11 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
       prevDatasource &&
       prevDatasource.type !== DatasourceType.Query &&
       (props.exploreState.datasource?.id !== prevDatasource.id ||
-        props.exploreState.datasource?.type !== prevDatasource.type)
+        props.exploreState.datasource?.type !== prevDatasource.type) &&
+      // ZetaIQ chart builder: a chart with a `zeta` block moves between its own datasets on a signal switch and
+      // reports what carried over itself; this alert repeated it, and "Clear form" wiped the builder block.
+      !(props.exploreState.form_data as { zeta?: unknown } | undefined)?.zeta &&
+      !(prevState?.form_data as { zeta?: unknown } | undefined)?.zeta
     ) {
       setShowDatasourceAlert(true);
       containerRef.current?.scrollTo(0, 0);
