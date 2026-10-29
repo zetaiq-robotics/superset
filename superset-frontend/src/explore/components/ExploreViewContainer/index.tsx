@@ -231,14 +231,17 @@ const updateHistory = debounce(
       } else {
         key = getUrlParam(URL_PARAMS.formDataKey);
         if (key) {
-          await putFormData(
-            datasourceId,
-            datasourceType,
-            key,
-            formData,
-            chartId,
-            tabId,
-          );
+          // The cache answers with a new key when the datasource changed; keep the URL on it, or a reload
+          // restores the state from before the change.
+          key =
+            (await putFormData(
+              datasourceId,
+              datasourceType,
+              key,
+              formData,
+              chartId,
+              tabId,
+            )) || key;
         }
       }
       // avoid race condition in case user changes route before explore updates the url
@@ -246,8 +249,9 @@ const updateHistory = debounce(
         const url = mountExploreUrl(
           standalone ? URL_PARAMS.standalone.name : 'base',
           {
-            [URL_PARAMS.formDataKey.name]: key ?? '',
+            // The key goes last: additionalParam is the current query string, old key included.
             ...additionalParam,
+            [URL_PARAMS.formDataKey.name]: key ?? '',
           },
           force,
           false,

@@ -217,7 +217,11 @@ jest.mock('lodash/debounce', () => ({
 }));
 
 fetchMock.post('glob:*/api/v1/explore/form_data*', { key: KEY });
-fetchMock.put('glob:*/api/v1/explore/form_data*', { key: KEY });
+fetchMock.put(
+  'glob:*/api/v1/explore/form_data*',
+  { key: KEY },
+  { name: 'put-form-data' },
+);
 fetchMock.get('glob:*/api/v1/explore/form_data*', {});
 fetchMock.get('glob:*/api/v1/chart/favorite_status*', {
   result: [{ value: true }],
@@ -417,6 +421,25 @@ test('reuses the same form_data param when updating', async () => {
     previousCall,
   );
   replaceSpy.mockRestore();
+  getChartControlPanelRegistry().remove('table');
+});
+
+test('moves the URL to the key the cache answers with when it changes', async () => {
+  // The cache key is per session, tab, datasource and chart: after a datasource change the PUT answers a
+  // new key. A URL left on the old one restores the state from before the change on reload.
+  getChartControlPanelRegistry().registerValue('table', {
+    controlPanelSections: [],
+  });
+  fetchMock.modifyRoute('put-form-data', { response: { key: 'NEWKEY' } });
+  const history = createMemoryHistory({
+    initialEntries: [`${defaultPath}${SEARCH}`],
+  });
+  renderWithRouter({ search: SEARCH, history });
+  await userEvent.click(screen.getByText('Update chart'));
+  await waitFor(() =>
+    expect(history.location.search).toContain('form_data_key=NEWKEY'),
+  );
+  fetchMock.modifyRoute('put-form-data', { response: { key: KEY } });
   getChartControlPanelRegistry().remove('table');
 });
 

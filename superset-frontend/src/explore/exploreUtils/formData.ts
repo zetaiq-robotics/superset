@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the key the form-data cache answers with is returned to the caller.
  */
 import { SupersetClient, JsonObject, JsonResponse } from '@superset-ui/core';
 import { sanitizeFormData } from 'src/utils/sanitizeFormData';
@@ -85,4 +87,4 @@ export const putFormData = (
       formData,
       chartId,
     ),
-  }).then((r: JsonResponse) => r.json.message);
+  }).then((r: JsonResponse) => r.json.key);

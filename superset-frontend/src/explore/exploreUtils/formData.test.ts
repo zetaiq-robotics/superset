@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the key the form-data cache answers with.
  */
 import { SupersetClient } from '@superset-ui/core';
 import { postFormData, putFormData } from './formData';
@@ -53,9 +55,11 @@ test('postFormData should call SupersetClient.post with correct payload and retu
   expect(result).toBe(mockKey);
 });
 
-test('putFormData should call SupersetClient.put with correct payload and return message', async () => {
-  const mockMessage = 'Form data updated';
-  const mockResponse = { json: { message: mockMessage } };
+test('putFormData should call SupersetClient.put with correct payload and return the key it answers with', async () => {
+  // PUT /api/v1/explore/form_data/<key> answers { key }: a new one when the datasource changed (the cache key is per
+  // session, tab, datasource and chart). Explore must adopt it, or a reload restores the state before the change.
+  const mockMessage = 'newkey456';
+  const mockResponse = { json: { key: mockMessage } };
 
   (SupersetClient.put as jest.Mock).mockResolvedValue(mockResponse);
 
