@@ -416,6 +416,8 @@ export interface ControlPanelSectionConfig {
     props: ControlPanelsContainerProps,
     controlData: AnyDict,
   ) => boolean;
+  // Modified by ZetaIQ: a hidden section keeps its fields in form_data, as a control's disableStash does.
+  disableStash?: boolean;
 }
 
 export interface StandardizedControls {

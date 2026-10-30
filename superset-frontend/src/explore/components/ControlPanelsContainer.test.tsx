@@ -618,6 +618,62 @@ describe('ControlPanelsContainer', () => {
     });
   });
 
+  // Modified by ZetaIQ: section-level disableStash (chart builder, F7).
+  test('a hidden section with disableStash keeps its fields in form data', async () => {
+    getChartControlPanelRegistry().remove('table');
+    getChartControlPanelRegistry().registerValue('table', {
+      controlPanelSections: [
+        {
+          label: t('Advanced analytics'),
+          expanded: true,
+          visibility: () => false,
+          disableStash: true,
+          controlSetRows: [
+            [
+              {
+                name: 'x_axis_time_format',
+                config: {
+                  type: 'SelectControl',
+                  label: t('Time Format'),
+                  default: 'smart_date',
+                  choices: [['smart_date', 'Adaptive Formatting']],
+                },
+              },
+            ],
+          ],
+        },
+      ],
+    });
+
+    const props = getDefaultProps();
+    props.form_data = { ...props.form_data, x_axis_time_format: 'smart_date' };
+
+    const { getByTestId } = render(
+      <>
+        <ControlPanelsContainer {...props} />
+        <FormDataMock />
+      </>,
+      {
+        useRedux: true,
+        initialState: {
+          explore: {
+            form_data: {
+              ...defaultState.form_data,
+              x_axis_time_format: 'smart_date',
+            },
+          },
+        },
+      },
+    );
+
+    expect(screen.queryByText('Advanced analytics')).not.toBeVisible();
+    await waitFor(() => {
+      expect(getByTestId('mock-formdata')).toHaveTextContent(
+        'x_axis_time_format',
+      );
+    });
+  });
+
   test('should not show Matrixify tab for table chart types', async () => {
     // Enable Matrixify feature flag
     mockIsFeatureEnabled.mockImplementation(

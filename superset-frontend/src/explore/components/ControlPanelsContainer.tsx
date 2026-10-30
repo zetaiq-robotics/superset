@@ -607,7 +607,7 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
     section: ExpandedControlPanelSectionConfig,
   ) => {
     const { controls, chart, exploreState, form_data, actions } = props;
-    const { label, description, visibility } = section;
+    const { label, description, visibility, disableStash } = section;
 
     // Section label can be a ReactNode but in some places we want to
     // have a string ID. Using forced type conversion for now,
@@ -673,7 +673,8 @@ export const ControlPanelsContainer = (props: ControlPanelsContainerProps) => {
       <>
         <StashFormDataContainer
           key={`sectionId-${sectionId}`}
-          shouldStash={!isVisible}
+          // Modified by ZetaIQ: section-level disableStash, as for controls.
+          shouldStash={!isVisible && disableStash !== true}
           fieldNames={section.controlSetRows
             .flat()
             .map(item =>
