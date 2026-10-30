@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: no certification fields; saving sends the existing certification back unchanged.
  */
 import {
   type ReactNode,
@@ -90,8 +92,8 @@ function PropertiesModal({
   const [cacheTimeout, setCacheTimeout] = useState(
     slice.cache_timeout != null ? String(slice.cache_timeout) : '',
   );
-  const [certifiedBy, setCertifiedBy] = useState(slice.certified_by || '');
-  const [certificationDetails, setCertificationDetails] = useState(
+  const [certifiedBy] = useState(slice.certified_by || '');
+  const [certificationDetails] = useState(
     slice.certified_by && slice.certification_details
       ? slice.certification_details
       : '',
@@ -148,11 +150,7 @@ function PropertiesModal({
           return errors;
         },
       },
-      {
-        key: 'advanced',
-        name: t('Advanced'),
-        validator: () => [],
-      },
+      // ZetaIQ: no "Advanced" (certification) section; saving keeps the chart's own certification as it is.
     ],
     [name, cacheTimeout],
   );
@@ -477,50 +475,7 @@ function PropertiesModal({
               </ModalFormField>
             ),
           },
-          {
-            key: 'advanced',
-            label: (
-              <CollapseLabelInModal
-                title={t('Advanced')}
-                subtitle={t('Certification and additional settings')}
-                validateCheckStatus={!validationStatus.advanced?.hasErrors}
-                testId="advanced-section"
-              />
-            ),
-            children: (
-              <>
-                <ModalFormField
-                  label={t('Certified by')}
-                  helperText={t(
-                    'Person or group that has certified this chart.',
-                  )}
-                >
-                  <Input
-                    aria-label={t('Certified by')}
-                    value={certifiedBy}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      setCertifiedBy(event.target.value ?? '')
-                    }
-                  />
-                </ModalFormField>
-                <ModalFormField
-                  label={t('Certification details')}
-                  helperText={t(
-                    'Any additional detail to show in the certification tooltip.',
-                  )}
-                  bottomSpacing={false}
-                >
-                  <Input
-                    aria-label={t('Certification details')}
-                    value={certificationDetails}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                      setCertificationDetails(event.target.value ?? '')
-                    }
-                  />
-                </ModalFormField>
-              </>
-            ),
-          },
+          // ZetaIQ: the "Advanced" (certification) section is removed (polish round, 2026-10-30).
         ]}
       />
     </StandardModal>

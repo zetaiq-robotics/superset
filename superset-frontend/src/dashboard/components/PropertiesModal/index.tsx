@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: no Certification section.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { omit } from 'lodash-es';
@@ -69,7 +71,6 @@ import {
   StylingSection,
   RefreshSection,
   AsyncModeSection,
-  CertificationSection,
   AdvancedSection,
 } from './sections';
 
@@ -646,11 +647,6 @@ const PropertiesModal = ({
         },
       },
       {
-        key: 'certification',
-        name: t('Certification'),
-        validator: () => [],
-      },
-      {
         key: 'advanced',
         name: t('Advanced settings'),
         validator: () => {
@@ -883,20 +879,7 @@ const PropertiesModal = ({
                   },
                 ]
               : []),
-            {
-              key: 'certification',
-              label: (
-                <CollapseLabelInModal
-                  title={t('Certification')}
-                  subtitle={t('Add certification details for this dashboard')}
-                  validateCheckStatus={
-                    !validationStatus.certification?.hasErrors
-                  }
-                  testId="certification-section"
-                />
-              ),
-              children: <CertificationSection isLoading={isLoading} />,
-            },
+            // ZetaIQ: no Certification section (polish round, 2026-10-30); saved values are kept on save.
             {
               key: 'advanced',
               label: (

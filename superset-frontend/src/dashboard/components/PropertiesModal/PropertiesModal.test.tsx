@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the removed Certification section.
  */
 import {
   fireEvent,
@@ -173,7 +175,8 @@ describe('PropertiesModal', () => {
     expect(screen.getByText('Styling')).toBeInTheDocument();
     expect(screen.getByText('Refresh settings')).toBeInTheDocument();
     expect(screen.getByText('Advanced settings')).toBeInTheDocument();
-    expect(screen.getByText('Certification')).toBeInTheDocument();
+    // ZetaIQ: no Certification section (polish round, 2026-10-30); saved values are still kept (test below).
+    expect(screen.queryByText('Certification')).not.toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
@@ -221,7 +224,8 @@ describe('PropertiesModal', () => {
     expect(screen.getByText('Styling')).toBeInTheDocument();
     expect(screen.getByText('Refresh settings')).toBeInTheDocument();
     expect(screen.getByText('Advanced settings')).toBeInTheDocument();
-    expect(screen.getByText('Certification')).toBeInTheDocument();
+    // ZetaIQ: no Certification section (polish round, 2026-10-30); saved values are still kept (test below).
+    expect(screen.queryByText('Certification')).not.toBeInTheDocument();
 
     // General information section is expanded by default
     expect(screen.getAllByRole('textbox')).toHaveLength(3); // Name, Slug and Description are visible
@@ -709,33 +713,7 @@ describe('PropertiesModal', () => {
     expect(requestedUrl).not.toContain('col:is_system');
   });
 
-  test('Empty "Certified by" should clear "Certification details"', async () => {
-    const props = createProps();
-    const noCertifiedByProps = {
-      ...props,
-      certified_by: '',
-    };
-    render(<PropertiesModal {...noCertifiedByProps} />, {
-      useRedux: true,
-    });
-
-    await screen.findByTestId('dashboard-edit-properties-form');
-
-    // Expand the Certification section first to access certification details
-    const certificationPanel = screen
-      .getByText('Certification')
-      .closest('[role="button"]');
-    if (certificationPanel) {
-      await userEvent.click(certificationPanel);
-    }
-
-    await waitFor(() => {
-      // Just check that there are textboxes now (certified by and certification details)
-      const textboxes = screen.getAllByRole('textbox');
-      expect(textboxes.length).toBeGreaterThanOrEqual(2);
-    });
-  });
-
+  // ZetaIQ: certification tests removed with the section (polish round, 2026-10-30).
   test('should not run validation while data is loading', async () => {
     mockedIsFeatureEnabled.mockReturnValue(false);
     const props = createProps();

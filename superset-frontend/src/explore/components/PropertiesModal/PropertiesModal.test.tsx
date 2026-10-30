@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the removed certification fields.
  */
 
 import {
@@ -194,7 +196,8 @@ test('Should render all elements inside modal', async () => {
       // Check for collapse sections instead of expecting all textboxes to be visible
       expect(screen.getByText('General settings')).toBeInTheDocument();
       expect(screen.getByText('Configuration')).toBeInTheDocument();
-      expect(screen.getByText('Advanced')).toBeInTheDocument();
+      // ZetaIQ: no certification, so no Advanced section (polish round, 2026-10-30).
+      expect(screen.queryByText('Advanced')).not.toBeInTheDocument();
 
       // Only General settings is expanded by default
       // Check for visible labels and fields in the expanded section
@@ -257,33 +260,6 @@ test('"Save" button should call "onSave" and "onHide"', async () => {
   await waitFor(() => {
     expect(props.onSave).toHaveBeenCalledTimes(1);
     expect(props.onHide).toHaveBeenCalledTimes(1);
-  });
-});
-
-test('Empty "Certified by" should clear "Certification details"', async () => {
-  const props = createProps();
-  const noCertifiedByProps = {
-    ...props,
-    slice: {
-      ...props.slice,
-      certified_by: '',
-    },
-  };
-  renderModal(noCertifiedByProps);
-
-  // Expand the Advanced section first to access certification details
-  const advancedPanel = screen.getByText('Advanced').closest('[role="tab"]');
-  if (advancedPanel) {
-    await userEvent.click(advancedPanel);
-  }
-
-  await waitFor(() => {
-    expect(
-      screen.getByRole('textbox', { name: 'Certification details' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('textbox', { name: 'Certification details' }),
-    ).toHaveValue('');
   });
 });
 
@@ -380,62 +356,6 @@ test('"Description" should not be empty when saved', async () => {
   });
 });
 
-test('"Certified by" should not be empty when saved', async () => {
-  const props = createProps();
-  renderModal(props);
-
-  // Expand the Advanced section first to access certified by
-  const advancedPanel = screen.getByText('Advanced').closest('[role="tab"]');
-  if (advancedPanel) {
-    await userEvent.click(advancedPanel);
-  }
-
-  const certifiedBy = await screen.findByRole('textbox', {
-    name: 'Certified by',
-  });
-  await userEvent.clear(certifiedBy);
-  await userEvent.type(certifiedBy, 'Test certified by');
-  expect(certifiedBy).toHaveValue('Test certified by');
-
-  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-
-  await waitFor(() => {
-    expect(props.onSave).toHaveBeenCalledTimes(1);
-    expect(props.onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ certified_by: 'Test certified by' }),
-    );
-  });
-});
-
-test('"Certification details" should not be empty when saved', async () => {
-  const props = createProps();
-  renderModal(props);
-
-  // Expand the Advanced section first to access certification details
-  const advancedPanel = screen.getByText('Advanced').closest('[role="tab"]');
-  if (advancedPanel) {
-    await userEvent.click(advancedPanel);
-  }
-
-  const certificationDetails = await screen.findByRole('textbox', {
-    name: 'Certification details',
-  });
-  await userEvent.clear(certificationDetails);
-  await userEvent.type(certificationDetails, 'Test certification details');
-  expect(certificationDetails).toHaveValue('Test certification details');
-
-  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-
-  await waitFor(() => {
-    expect(props.onSave).toHaveBeenCalledTimes(1);
-    expect(props.onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        certification_details: 'Test certification details',
-      }),
-    );
-  });
-});
-
 test('Should display only custom tags when tagging system is enabled', async () => {
   const mockIsFeatureEnabled = isFeatureEnabled as jest.MockedFunction<
     typeof isFeatureEnabled
@@ -478,4 +398,16 @@ test('Should show Viewers picker when ENABLE_VIEWERS is on', async () => {
   });
 
   mockIsFeatureEnabled.mockRestore();
+});
+
+// ZetaIQ (polish round, 2026-10-30): certification is not offered; saving keeps the chart's own values as they are.
+test('certification is not offered, and saving leaves it as it was', async () => {
+  const props = createProps();
+  renderModal(props);
+  expect(screen.queryByRole('textbox', { name: 'Certified by' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('textbox', { name: 'Certification details' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(props.onSave).toHaveBeenCalled());
+  const sent = JSON.parse(String(fetchMock.callHistory.calls('glob:*/api/v1/chart/318').filter(c => c.options?.method?.toUpperCase() === 'PUT').pop()?.options?.body));
+  expect(sent).toMatchObject({ certified_by: 'John Doe', certification_details: 'Sample certification' });
 });
