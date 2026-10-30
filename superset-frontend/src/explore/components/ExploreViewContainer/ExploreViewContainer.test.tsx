@@ -111,8 +111,27 @@ jest.mock(
   }),
 );
 
+// Modified by ZetaIQ: the column class and sizes are kept for the F6 tests.
 jest.mock('re-resizable', () => ({
-  Resizable: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  Resizable: ({
+    children,
+    className,
+    defaultSize,
+    minWidth,
+  }: {
+    children: ReactNode;
+    className?: string;
+    defaultSize?: { width: number };
+    minWidth?: number;
+  }) => (
+    <div
+      className={className}
+      data-width={defaultSize?.width}
+      data-min-width={minWidth}
+    >
+      {children}
+    </div>
+  ),
 }));
 
 jest.mock('../ExploreChartPanel', () => ({
@@ -1455,6 +1474,45 @@ test('renders the registered datasource panel with the stock props', async () =>
     expect(props.Fallback).toBeDefined();
   } finally {
     getExtensionsRegistry().set('explore.datasource.panel', undefined);
+  }
+});
+
+// Modified by ZetaIQ: explore.datasource.hidden extension (chart builder, F6).
+test('a chart the hidden extension claims has no datasource column, and a wider controls column', async () => {
+  const seen: unknown[] = [];
+  getExtensionsRegistry().set(
+    'explore.datasource.hidden',
+    (formData: unknown) => {
+      seen.push(formData);
+      return true;
+    },
+  );
+  try {
+    renderWithRouter();
+    const gate = await screen.findByTestId('explore-controls-gate');
+    expect(seen.length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('datasource-panel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Chart Source')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('open-datasource-tab')).not.toBeInTheDocument();
+    const controls = gate.parentElement as HTMLElement;
+    expect(controls).toHaveClass('controls-column');
+    expect(controls).toHaveAttribute('data-width', '420');
+    expect(controls).toHaveAttribute('data-min-width', '420');
+    expect(document.querySelector('.main-explore-content')).toHaveClass(
+      'col-sm-9',
+    );
+  } finally {
+    getExtensionsRegistry().set('explore.datasource.hidden', undefined);
+  }
+});
+
+test('a chart the hidden extension does not claim keeps the datasource column', async () => {
+  getExtensionsRegistry().set('explore.datasource.hidden', () => false);
+  try {
+    renderWithRouter();
+    expect(await screen.findByTestId('datasource-panel')).toBeInTheDocument();
+  } finally {
+    getExtensionsRegistry().set('explore.datasource.hidden', undefined);
   }
 });
 

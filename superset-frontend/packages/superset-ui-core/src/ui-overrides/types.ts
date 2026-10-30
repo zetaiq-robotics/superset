@@ -297,4 +297,7 @@ export type Extensions = Partial<{
   'filter.dateFilterControl': ComponentType<DateFilterControlProps>;
   'explore.chart.header': ComponentType<ExploreChartHeaderProps>;
   'explore.datasource.panel': ComponentType<ExploreDatasourcePanelProps>;
+  // Modified by ZetaIQ: true drops the datasource column for this chart. Called on
+  // every Explore render, so it may use React hooks.
+  'explore.datasource.hidden': (formData: QueryFormData) => boolean;
 }>;

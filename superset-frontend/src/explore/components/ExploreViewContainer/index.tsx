@@ -285,6 +285,9 @@ const defaultSidebarsWidth: Record<DefaultSidebarWidthKey, number> = {
   datasource_width: 300,
 };
 
+// Modified by ZetaIQ: the controls column's floor when the datasource column is hidden.
+const WIDE_CONTROLS = 420;
+
 function getSidebarWidths(
   key: LocalStorageKeys.ControlsWidth | LocalStorageKeys.DatasourceWidth,
 ): number {
@@ -443,6 +446,11 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
   const DatasourcePanelExtension = getExtensionsRegistry().get(
     'explore.datasource.panel',
   );
+  // Modified by ZetaIQ: an extension may drop the datasource column; the controls column widens instead.
+  const useDatasourceHidden = getExtensionsRegistry().get(
+    'explore.datasource.hidden',
+  );
+  const datasourceHidden = useDatasourceHidden?.(props.form_data) ?? false;
 
   // Capture original title before any effects run
   const originalTitle = useMemo(() => document.title, []);
@@ -1100,80 +1108,82 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
             }
           `}
         />
-        <Resizable
-          onResizeStop={(evt, direction, ref, d) => {
-            setWidth(ref.getBoundingClientRect().width);
-            setSidebarWidths(LocalStorageKeys.DatasourceWidth, d);
-          }}
-          defaultSize={{
-            width: getSidebarWidths(LocalStorageKeys.DatasourceWidth),
-            height: '100%',
-          }}
-          minWidth={defaultSidebarsWidth[LocalStorageKeys.DatasourceWidth]}
-          maxWidth="33%"
-          enable={{ right: true }}
-          className={
-            isCollapsed ? 'no-show' : 'explore-column data-source-selection'
-          }
-        >
-          <div className="title-container">
-            <span className="horizontal-text">{t('Chart Source')}</span>
-            <ActionButton
-              label={t('Collapse Datasource panel')}
-              icon={
-                <Icons.VerticalAlignTopOutlined
-                  iconSize="xl"
-                  css={css`
-                    transform: rotate(-90deg);
-                  `}
-                  className="collapse-icon"
-                  iconColor={theme.colorPrimary}
-                />
-              }
-              onClick={toggleCollapse}
-            />
-          </div>
-          <div
-            data-test="explore-datasource-gate"
-            aria-disabled={isChartVersionPreviewActive}
-            css={css`
-              height: 100%;
-              ${
-                isChartVersionPreviewActive
-                  ? `
+        {!datasourceHidden && (
+          <Resizable
+            onResizeStop={(evt, direction, ref, d) => {
+              setWidth(ref.getBoundingClientRect().width);
+              setSidebarWidths(LocalStorageKeys.DatasourceWidth, d);
+            }}
+            defaultSize={{
+              width: getSidebarWidths(LocalStorageKeys.DatasourceWidth),
+              height: '100%',
+            }}
+            minWidth={defaultSidebarsWidth[LocalStorageKeys.DatasourceWidth]}
+            maxWidth="33%"
+            enable={{ right: true }}
+            className={
+              isCollapsed ? 'no-show' : 'explore-column data-source-selection'
+            }
+          >
+            <div className="title-container">
+              <span className="horizontal-text">{t('Chart Source')}</span>
+              <ActionButton
+                label={t('Collapse Datasource panel')}
+                icon={
+                  <Icons.VerticalAlignTopOutlined
+                    iconSize="xl"
+                    css={css`
+                      transform: rotate(-90deg);
+                    `}
+                    className="collapse-icon"
+                    iconColor={theme.colorPrimary}
+                  />
+                }
+                onClick={toggleCollapse}
+              />
+            </div>
+            <div
+              data-test="explore-datasource-gate"
+              aria-disabled={isChartVersionPreviewActive}
+              css={css`
+                height: 100%;
+                ${
+                  isChartVersionPreviewActive
+                    ? `
                   pointer-events: none;
                   opacity: 0.5;
                 `
-                  : ''
-              }
-            `}
-            {...(isChartVersionPreviewActive ? { inert: '' } : {})}
-          >
-            {/* eslint-disable @typescript-eslint/no-explicit-any -- DataSourcePanel uses narrower types that are compatible at runtime */}
-            {DatasourcePanelExtension ? (
-              <DatasourcePanelExtension
-                formData={props.form_data}
-                datasource={props.datasource}
-                controls={props.controls}
-                actions={props.actions}
-                width={width}
-                Fallback={
-                  DataSourcePanel as unknown as ComponentType<ExploreDatasourcePanelBaseProps>
+                    : ''
                 }
-              />
-            ) : (
-              <DataSourcePanel
-                formData={props.form_data}
-                datasource={props.datasource as any}
-                controls={props.controls as any}
-                actions={props.actions as any}
-                width={width}
-              />
-            )}
-            {/* eslint-enable @typescript-eslint/no-explicit-any */}
-          </div>
-        </Resizable>
-        {isCollapsed ? (
+              `}
+              {...(isChartVersionPreviewActive ? { inert: '' } : {})}
+            >
+              {/* eslint-disable @typescript-eslint/no-explicit-any -- DataSourcePanel uses narrower types that are compatible at runtime */}
+              {DatasourcePanelExtension ? (
+                <DatasourcePanelExtension
+                  formData={props.form_data}
+                  datasource={props.datasource}
+                  controls={props.controls}
+                  actions={props.actions}
+                  width={width}
+                  Fallback={
+                    DataSourcePanel as unknown as ComponentType<ExploreDatasourcePanelBaseProps>
+                  }
+                />
+              ) : (
+                <DataSourcePanel
+                  formData={props.form_data}
+                  datasource={props.datasource as any}
+                  controls={props.controls as any}
+                  actions={props.actions as any}
+                  width={width}
+                />
+              )}
+              {/* eslint-enable @typescript-eslint/no-explicit-any */}
+            </div>
+          </Resizable>
+        )}
+        {isCollapsed && !datasourceHidden ? (
           <button
             type="button"
             className="sidebar"
@@ -1204,14 +1214,30 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
           </button>
         ) : null}
         <Resizable
+          // Modified by ZetaIQ: remount on hide/show so the default width applies.
+          key={datasourceHidden ? 'wide' : 'stock'}
           onResizeStop={(evt, direction, ref, d) =>
-            setSidebarWidths(LocalStorageKeys.ControlsWidth, d)
+            datasourceHidden
+              ? setItem(
+                  LocalStorageKeys.ControlsWidth,
+                  ref.getBoundingClientRect().width,
+                )
+              : setSidebarWidths(LocalStorageKeys.ControlsWidth, d)
           }
           defaultSize={{
-            width: getSidebarWidths(LocalStorageKeys.ControlsWidth),
+            width: datasourceHidden
+              ? Math.max(
+                  getSidebarWidths(LocalStorageKeys.ControlsWidth),
+                  WIDE_CONTROLS,
+                )
+              : getSidebarWidths(LocalStorageKeys.ControlsWidth),
             height: '100%',
           }}
-          minWidth={defaultSidebarsWidth[LocalStorageKeys.ControlsWidth]}
+          minWidth={
+            datasourceHidden
+              ? WIDE_CONTROLS
+              : defaultSidebarsWidth[LocalStorageKeys.ControlsWidth]
+          }
           maxWidth="33%"
           enable={{ right: true }}
           className="col-sm-3 explore-column controls-column"
@@ -1254,7 +1280,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
         <div
           className={cx(
             'main-explore-content',
-            isCollapsed ? 'col-sm-9' : 'col-sm-7',
+            isCollapsed || datasourceHidden ? 'col-sm-9' : 'col-sm-7',
           )}
         >
           {isChartVersionPreviewActive ? (
