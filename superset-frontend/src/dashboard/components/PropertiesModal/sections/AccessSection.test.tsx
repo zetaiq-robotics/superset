@@ -15,9 +15,12 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for typing a new tag.
  */
-import { render, screen } from 'spec/helpers/testing-library';
+import { render, screen, userEvent, waitFor } from 'spec/helpers/testing-library';
 import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
+import { loadTags } from 'src/components/Tag/utils';
 import AccessSection from './AccessSection';
 
 // Mock feature flags
@@ -120,4 +123,20 @@ test('shows editors and viewers helper text when EnableViewers is on', () => {
 
   expect(screen.getByText(/Editors is a list of subjects/)).toBeInTheDocument();
   expect(screen.getByText(/Viewers is a list of subjects/)).toBeInTheDocument();
+});
+
+// ZetaIQ (polish round, 2026-10-30): pick existing tags or type a new one.
+test('the tags field takes a typed new tag as well as existing ones', async () => {
+  mockedIsFeatureEnabled.mockImplementation((flag: any) => flag === FeatureFlag.TaggingSystem);
+  (loadTags as jest.Mock).mockResolvedValue({ data: [{ label: 'Important', value: 1 }], totalCount: 1 });
+  render(<AccessSection {...defaultProps} />);
+  const box = screen.getByRole('combobox', { name: 'Tags' });
+  userEvent.type(box, 'fleet ops');
+  await waitFor(() => expect(screen.getAllByTitle('fleet ops').length).toBeGreaterThan(0));
+  const option = screen.getAllByTitle('fleet ops').find(el => el.closest('.ant-select-item-option'))!;
+  userEvent.click(option);
+  expect(defaultProps.onChangeTags).toHaveBeenCalledWith(
+    expect.arrayContaining([expect.objectContaining({ value: 'fleet ops' })]),
+    expect.anything(),
+  );
 });

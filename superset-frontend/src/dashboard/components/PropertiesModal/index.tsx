@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: no Certification section.
+ * Modified by ZetaIQ: no Certification section; a typed new tag is created and swapped for its id.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { omit } from 'lodash-es';
@@ -46,7 +46,7 @@ import {
   type SubjectPickerValue,
 } from 'src/features/subjects/SubjectPicker';
 import Subject from 'src/types/Subject';
-import { fetchTags, OBJECT_TYPES } from 'src/features/tags/tags';
+import { ensureTagIds, fetchTags, OBJECT_TYPES } from 'src/features/tags/tags';
 import {
   applyColors,
   getColorNamespace,
@@ -574,6 +574,13 @@ const PropertiesModal = ({
       name: r.label,
     }));
     setTags(parsedTags);
+    // ZetaIQ: a typed new tag is created at once and swapped for its id, so Save still sends ids.
+    if (parsedTags.some(tag => typeof tag.id !== 'number')) {
+      ensureTagIds(parsedTags).then(resolved => {
+        if (resolved.length < parsedTags.length) addDangerToast(t('A new tag could not be added'));
+        setTags(resolved);
+      });
+    }
   };
 
   const handleClearTags = () => {

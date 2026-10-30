@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the tags picker accepts a new tag name.
  */
 import { useMemo } from 'react';
 import { t } from '@apache-superset/core/translation';
@@ -136,7 +138,9 @@ const AccessSection = ({
             onClear={onClearTags}
             allowClear
             showSearch
-            placeholder={t('Search tags')}
+            // ZetaIQ: a typed name is a new tag, created on pick (features/tags ensureTagIds).
+            allowNewOptions
+            placeholder={t('Search or type a new tag')}
           />
         </ModalFormField>
       )}

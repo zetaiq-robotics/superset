@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: `ensureTagIds` creates typed tags and returns their ids.
  */
 import { JsonObject, SupersetClient } from '@superset-ui/core';
 import rison from 'rison';
@@ -194,4 +196,39 @@ export function fetchObjectsByTagIds(
   SupersetClient.get({ endpoint: url })
     .then(({ json }) => callback(json.result))
     .catch(response => error(response));
+}
+
+/**
+ * ZetaIQ (polish round, 2026-10-30): dashboard properties may add a tag by typing its name. A tag whose id is not a
+ * number is a typed name: it is created (POST /api/v1/tag/, which answers without the id), then looked up by name.
+ * A name that already exists is simply found. One that can neither be created nor found is dropped rather than saved
+ * with a name where an id belongs.
+ */
+export async function ensureTagIds(tags: TagType[]): Promise<TagType[]> {
+  const out: TagType[] = [];
+  for (const tag of tags) {
+    if (typeof tag.id === 'number' && Number.isFinite(tag.id)) {
+      out.push(tag);
+      continue;
+    }
+    const name = String(tag.name ?? tag.id).trim();
+    if (!name) continue;
+    try {
+      await SupersetClient.post({
+        endpoint: '/api/v1/tag/',
+        jsonPayload: { name, description: '', objects_to_tag: [] },
+      });
+    } catch {
+      // Already there (or not allowed): the lookup below decides.
+    }
+    try {
+      const q = rison.encode({ filters: [{ col: 'name', opr: 'eq', value: name }], page_size: 1 });
+      const { json } = await SupersetClient.get({ endpoint: `/api/v1/tag/?q=${q}` });
+      const found = (json?.result ?? [])[0];
+      if (found && typeof found.id === 'number') out.push({ id: found.id, name: found.name ?? name });
+    } catch {
+      // Not found: dropped.
+    }
+  }
+  return out;
 }
