@@ -266,6 +266,8 @@ export type Extensions = Partial<{
   'embedded.documentation.description': ReturningDisplayable;
   'embedded.documentation.url': string;
   'embedded.modal': ComponentType<DashboardEmbedModalExtensions>;
+  // Modified by ZetaIQ: a component before the dashboard title (a way back to the list).
+  'dashboard.nav.left': ComponentType;
   'dashboard.nav.right': ComponentType;
   'home.submenu': ComponentType<SubMenuProps>;
   'navbar.right-menu.item.icon': ComponentType<RightMenuItemIconProps>;

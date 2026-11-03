@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test for the `dashboard.nav.left` extension.
  */
 // Imported first: loading this before 'spec/helpers/testing-library' or
 // '@superset-ui/core' ensures mockAntdWithDesktopBreakpoint is defined
@@ -812,6 +814,22 @@ test('should render an extension component if one is supplied', () => {
   expect(
     screen.getByText('dashboard.nav.right extension component'),
   ).toBeInTheDocument();
+});
+
+test('should render a left extension component before the title', () => {
+  const extensionsRegistry = getExtensionsRegistry();
+  extensionsRegistry.set('dashboard.nav.left', () => (
+    <>dashboard.nav.left extension component</>
+  ));
+  setupCodeOverrides();
+
+  setup();
+  const left = screen.getByText('dashboard.nav.left extension component');
+  const title = screen.getByTestId('editable-title-input');
+  expect(
+    // eslint-disable-next-line no-bitwise
+    left.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });
 
 test('should NOT render MetadataBar when in edit mode', () => {

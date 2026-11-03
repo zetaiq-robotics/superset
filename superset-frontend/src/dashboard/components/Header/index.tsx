@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a `dashboard.nav.left` extension renders before the title.
  */
 /* eslint-env browser */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -616,6 +618,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
   }, [toggleEditMode, boundActionCreators]);
 
   const NavExtension = extensionsRegistry.get('dashboard.nav.right');
+  const NavLeftExtension = extensionsRegistry.get('dashboard.nav.left');
 
   const editableTitleProps = useMemo(
     () => ({
@@ -867,19 +870,22 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
         certificatiedBadgeProps={certifiedBadgeProps}
         faveStarProps={faveStarProps}
         leftPanelItems={
-          onOpenMobileFilters && (
-            <Button
-              buttonStyle="link"
-              aria-label={t('Open filters')}
-              onClick={onOpenMobileFilters}
-              data-test="mobile-filters-trigger"
-            >
-              <Icons.FilterOutlined
-                iconColor={theme.colorPrimary}
-                iconSize="l"
-              />
-            </Button>
-          )
+          <>
+            {NavLeftExtension && <NavLeftExtension />}
+            {onOpenMobileFilters && (
+              <Button
+                buttonStyle="link"
+                aria-label={t('Open filters')}
+                onClick={onOpenMobileFilters}
+                data-test="mobile-filters-trigger"
+              >
+                <Icons.FilterOutlined
+                  iconColor={theme.colorPrimary}
+                  iconSize="l"
+                />
+              </Button>
+            )}
+          </>
         }
         titlePanelAdditionalItems={titlePanelAdditionalItems}
         rightPanelAdditionalItems={rightPanelAdditionalItems}
