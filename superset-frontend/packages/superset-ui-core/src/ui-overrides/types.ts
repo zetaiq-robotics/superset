@@ -273,6 +273,23 @@ export interface DashboardSlicesFolderProps {
   chartIds: number[];
 }
 
+// Modified by ZetaIQ: a field in Explore's save dialog that files the saved chart.
+export interface ExploreSaveFolderProps {
+  /** The chart open in Explore; null for a new chart. */
+  chartId: number | null;
+  action: 'overwrite' | 'saveas';
+  /** The chart a "Save as" starts from; null otherwise. */
+  sourceChartId: number | null;
+  /** The existing dashboard chosen in the dialog, if any. */
+  dashboardIds: number[];
+  /**
+   * Registers the function the dialog awaits with the saved chart's id once
+   * the save succeeded, before it navigates. The latest one registered is
+   * used; a rejection never undoes or blocks the save.
+   */
+  onReady(file: (savedChartId: number) => Promise<void>): void;
+}
+
 export type Extensions = Partial<{
   'alertsreports.header.icon': ComponentType;
   'load.drillby.options': LoadDrillByOptions;
@@ -316,6 +333,8 @@ export type Extensions = Partial<{
   'filter.dateFilterControl': ComponentType<DateFilterControlProps>;
   'explore.chart.header': ComponentType<ExploreChartHeaderProps>;
   'explore.datasource.panel': ComponentType<ExploreDatasourcePanelProps>;
+  // Modified by ZetaIQ: a field in the save dialog body (a folder for the chart).
+  'explore.save.folder': ComponentType<ExploreSaveFolderProps>;
   // Modified by ZetaIQ: true drops the datasource column for this chart. Called on
   // every Explore render, so it may use React hooks.
   'explore.datasource.hidden': (formData: QueryFormData) => boolean;

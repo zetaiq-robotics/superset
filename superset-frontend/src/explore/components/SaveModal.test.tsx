@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: tests for saving a chart opened from a dashboard to that dashboard only.
+ * Modified by ZetaIQ: tests for saving a chart opened from a dashboard to that dashboard only,
+ * and for the `explore.save.folder` extension.
  */
 import configureStore from 'redux-mock-store';
 import thunk from 'redux-thunk';
@@ -29,6 +30,11 @@ import {
   within,
 } from 'spec/helpers/testing-library';
 import fetchMock from 'fetch-mock';
+import { useEffect } from 'react';
+import {
+  getExtensionsRegistry,
+  type ExploreSaveFolderProps,
+} from '@superset-ui/core';
 import type {
   SelectValue,
   SelectOptionsPagePromise,
@@ -954,4 +960,156 @@ test('addChartToDashboard handles empty position_json', async () => {
     SupersetClient.put = originalPut;
     mockNanoid.mockRestore();
   }
+});
+
+// ZetaIQ: the `explore.save.folder` extension renders in the dialog and files the saved chart.
+const registerSaveFolder = (file?: (savedChartId: number) => Promise<void>) => {
+  sessionStorage.clear();
+  const seen: ExploreSaveFolderProps[] = [];
+  getExtensionsRegistry().set('explore.save.folder', props => {
+    seen.push(props);
+    const { onReady } = props;
+    useEffect(() => {
+      if (file) onReady(file);
+    }, [onReady]);
+    return <div data-test="save-folder-slot" />;
+  });
+  return seen;
+};
+
+const tableStore = () =>
+  mockStore({
+    ...initialState,
+    explore: { ...initialState.explore, datasource: { type: 'table' } },
+  });
+
+const saveAsNewChart = (store: ReturnType<typeof mockStore>) => {
+  const createSlice = jest.fn().mockResolvedValue({ id: 42 });
+  const utils = setup(
+    {
+      ...defaultProps,
+      actions: {
+        ...defaultProps.actions,
+        setFormData: jest.fn(),
+        createSlice,
+      },
+    },
+    store,
+  );
+  fireEvent.click(utils.getByRole('radio', { name: 'Save as...' }));
+  fireEvent.change(utils.getByTestId('new-chart-name'), {
+    target: { value: 'Copy' },
+  });
+  fireEvent.click(utils.getByRole('button', { name: 'Save' }));
+  return createSlice;
+};
+
+const hidden = (store: ReturnType<typeof mockStore>) =>
+  store
+    .getActions()
+    .some(
+      ({ type, isVisible }) =>
+        type === saveModalActions.SET_SAVE_CHART_MODAL_VISIBILITY && !isVisible,
+    );
+
+afterEach(() => getExtensionsRegistry().set('explore.save.folder', undefined));
+
+test('the explore.save.folder extension renders with the chart, action and dashboards', async () => {
+  const seen = registerSaveFolder();
+  const { getByTestId, getByRole } = setup();
+  expect(getByTestId('save-folder-slot')).toBeInTheDocument();
+
+  fireEvent.click(getByRole('radio', { name: 'Save as...' }));
+  expect(seen[seen.length - 1]).toEqual(
+    expect.objectContaining({
+      chartId: 1,
+      action: 'saveas',
+      sourceChartId: 1,
+      dashboardIds: [],
+    }),
+  );
+
+  fireEvent.change(getByTestId('mock-async-select'), {
+    target: { value: 'New dashboard' },
+  });
+  expect(seen[seen.length - 1].dashboardIds).toEqual([]);
+});
+
+test('the explore.save.folder extension gets the chosen dashboard id', async () => {
+  const dashboardId = 7;
+  fetchMock.removeRoutes();
+  fetchMock.get(`glob:*/api/v1/dashboard/${dashboardId}/tabs`, {
+    result: { tab_tree: [] },
+  });
+  fetchMock.get(`glob:*/api/v1/dashboard/${dashboardId}`, {
+    result: {
+      id: dashboardId,
+      dashboard_title: 'Plant A',
+      owners: [{ id: 1 }],
+    },
+  });
+  const seen = registerSaveFolder();
+  const admin = {
+    userId: 1,
+    username: 'admin',
+    isActive: true,
+    permissions: {},
+    roles: { Admin: [['can_write', 'Dashboard']] },
+  };
+  setup(
+    { ...defaultProps, dashboardId },
+    mockStore({ ...initialState, user: admin }),
+  );
+  await waitFor(() =>
+    expect(seen[seen.length - 1].dashboardIds).toEqual([dashboardId]),
+  );
+});
+
+test('a new chart passes no chart ids to the explore.save.folder extension', () => {
+  const seen = registerSaveFolder();
+  setup(
+    defaultProps,
+    mockStore({
+      ...initialState,
+      explore: { ...initialState.explore, slice: null },
+    }),
+  );
+  expect(seen[seen.length - 1]).toEqual(
+    expect.objectContaining({
+      chartId: null,
+      action: 'saveas',
+      sourceChartId: null,
+    }),
+  );
+});
+
+test('the saved chart is filed through the extension before the dialog closes', async () => {
+  const store = tableStore();
+  let hiddenWhenFiled: boolean | undefined;
+  const file = jest.fn(async () => {
+    hiddenWhenFiled = hidden(store);
+  });
+  registerSaveFolder(file);
+  const createSlice = saveAsNewChart(store);
+
+  await waitFor(() => expect(hidden(store)).toBe(true));
+  expect(createSlice).toHaveBeenCalled();
+  expect(file).toHaveBeenCalledTimes(1);
+  expect(file).toHaveBeenCalledWith(42);
+  expect(hiddenWhenFiled).toBe(false);
+});
+
+test('a failed filing still completes the save and closes the dialog', async () => {
+  const store = tableStore();
+  const file = jest.fn().mockRejectedValue(new Error('403'));
+  registerSaveFolder(file);
+  saveAsNewChart(store);
+
+  await waitFor(() => expect(hidden(store)).toBe(true));
+  expect(file).toHaveBeenCalledWith(42);
+});
+
+test('no folder field without the explore.save.folder extension', () => {
+  const { queryByTestId } = setup();
+  expect(queryByTestId('save-folder-slot')).not.toBeInTheDocument();
 });

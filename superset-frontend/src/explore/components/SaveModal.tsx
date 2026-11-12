@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: a chart opened from a dashboard is saved to that dashboard only.
+ * Modified by ZetaIQ: a chart opened from a dashboard is saved to that dashboard only;
+ * an `explore.save.folder` extension renders in the dialog and files the saved chart.
  */
 /* eslint camelcase: 0 */
 import {
@@ -26,6 +27,7 @@ import {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
 } from 'react';
 import { Dispatch } from 'redux';
 import { nanoid } from 'nanoid';
@@ -49,7 +51,12 @@ import {
 } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
 import { logging } from '@apache-superset/core/utils';
-import { DatasourceType, isDefined, SupersetClient } from '@superset-ui/core';
+import {
+  DatasourceType,
+  getExtensionsRegistry,
+  isDefined,
+  SupersetClient,
+} from '@superset-ui/core';
 import { css, styled, useTheme } from '@apache-superset/core/theme';
 import { Alert } from '@apache-superset/core/components';
 import { Radio } from '@superset-ui/core/components/Radio';
@@ -252,6 +259,23 @@ const SaveModal = ({
   const isNewDashboard = useCallback(
     (): boolean => typeof dashboard?.value === 'string',
     [dashboard?.value],
+  );
+
+  // ZetaIQ: the folder extension registers how to file the saved chart.
+  const SaveFolderExtension = getExtensionsRegistry().get(
+    'explore.save.folder',
+  );
+  const fileChartRef = useRef<(savedChartId: number) => Promise<void>>();
+  const onFolderReady = useCallback(
+    (file: (savedChartId: number) => Promise<void>) => {
+      fileChartRef.current = file;
+    },
+    [],
+  );
+  const chosenDashboardId = dashboard?.value;
+  const chosenDashboardIds = useMemo(
+    () => (typeof chosenDashboardId === 'number' ? [chosenDashboardId] : []),
+    [chosenDashboardId],
   );
 
   const loadDashboard = useCallback(async (id: number) => {
@@ -585,6 +609,15 @@ const SaveModal = ({
           }
         }
 
+        // ZetaIQ: the chart is saved; filing it is best effort and never undoes the save.
+        if (fileChartRef.current) {
+          try {
+            await fileChartRef.current(value.id);
+          } catch (error) {
+            logging.warn('Filing the saved chart failed:', error);
+          }
+        }
+
         try {
           if (dashboardResult) {
             sessionStorage.setItem(SK_DASHBOARD_ID, `${dashboardResult.id}`);
@@ -842,6 +875,17 @@ const SaveModal = ({
             placeholder={t('Select a tab')}
           />
         </FormItem>
+      )}
+      {SaveFolderExtension && (
+        <SaveFolderExtension
+          chartId={slice?.slice_id ?? null}
+          action={action}
+          sourceChartId={
+            action === ChartStatusType.saveas ? (slice?.slice_id ?? null) : null
+          }
+          dashboardIds={chosenDashboardIds}
+          onReady={onFolderReady}
+        />
       )}
       {info && <Alert type="info" message={info} closable={false} />}
       {alertProp && (
