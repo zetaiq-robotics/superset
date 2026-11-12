@@ -15,9 +15,12 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a "Folder" column when a `dataset.usage.chartFolder` extension is registered.
  */
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { t } from '@apache-superset/core/translation';
+import { getExtensionsRegistry } from '@superset-ui/core';
 import { styled, css } from '@apache-superset/core/theme';
 import {
   CertifiedBadge,
@@ -204,6 +207,8 @@ const DatasetUsageTab = ({
     [currentPage, handlePageChange],
   );
 
+  const ChartFolder = getExtensionsRegistry().get('dataset.usage.chartFolder');
+
   const columns = useMemo(
     () => [
       {
@@ -241,6 +246,19 @@ const DatasetUsageTab = ({
         }),
         width: 300,
       },
+      ...(ChartFolder
+        ? [
+            {
+              title: t('Folder'),
+              dataIndex: 'id',
+              key: 'folder',
+              render: (_: unknown, record: Chart) =>
+                record.id ? <ChartFolder chartId={record.id} /> : null,
+              sorter: false,
+              width: 160,
+            },
+          ]
+        : []),
       {
         title: t('Chart editors'),
         dataIndex: 'editors',
@@ -289,7 +307,7 @@ const DatasetUsageTab = ({
         width: 200,
       },
     ],
-    [handleSortChange, sortColumn, sortDirection],
+    [ChartFolder, handleSortChange, sortColumn, sortDirection],
   );
 
   const filteredCharts = useMemo(() => {

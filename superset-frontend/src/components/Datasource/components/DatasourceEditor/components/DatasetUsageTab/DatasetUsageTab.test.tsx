@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the `dataset.usage.chartFolder` extension.
  */
 import {
   createWrapper,
@@ -24,6 +26,7 @@ import {
 } from 'spec/helpers/testing-library';
 import userEvent from '@testing-library/user-event';
 import fetchMock from 'fetch-mock';
+import { getExtensionsRegistry } from '@superset-ui/core';
 import { SubjectType } from 'src/types/Subject';
 import DatasetUsageTab from '.';
 
@@ -690,4 +693,28 @@ test('hides pagination when searching and restores it when cleared', async () =>
 
   // Pagination is restored
   expect(screen.getByTitle('1')).toBeInTheDocument();
+});
+
+// ZetaIQ: a "Folder" column whose cells render the `dataset.usage.chartFolder` extension.
+const folderHeader = () =>
+  screen.queryAllByText('Folder').find(el => el.closest('th'));
+
+test('shows a Folder column rendering the dataset.usage.chartFolder extension per chart', async () => {
+  getExtensionsRegistry().set('dataset.usage.chartFolder', ({ chartId }) => (
+    <span>folder of chart {chartId}</span>
+  ));
+  try {
+    setupTest();
+    expect(await screen.findByText('folder of chart 1')).toBeInTheDocument();
+    expect(screen.getByText('folder of chart 2')).toBeInTheDocument();
+    expect(folderHeader()).toBeInTheDocument();
+  } finally {
+    getExtensionsRegistry().set('dataset.usage.chartFolder', undefined);
+  }
+});
+
+test('no Folder column without the dataset.usage.chartFolder extension', async () => {
+  setupTest();
+  expect(await screen.findByText('Test Chart 1')).toBeInTheDocument();
+  expect(folderHeader()).toBeUndefined();
 });

@@ -317,6 +317,8 @@ export type Extensions = Partial<{
   /* Custom components to show in the database and dataset delete modals */
   'database.delete.related': ComponentType<DatabaseDeleteRelatedExtensionProps>;
   'dataset.delete.related': ComponentType<DatasetDeleteRelatedExtensionProps>;
+  // Modified by ZetaIQ: a "Folder" cell per chart in the dataset editor's Usage tab.
+  'dataset.usage.chartFolder': ComponentType<{ chartId: number }>;
   'sqleditor.extension.form': ComponentType<SQLFormExtensionProps>;
   'sqleditor.extension.resultTable': ComponentType<SQLResultTableExtensionProps>;
   'dashboard.slice.header': ComponentType<SliceHeaderExtension>;
