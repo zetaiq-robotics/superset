@@ -259,6 +259,20 @@ export interface ExploreDatasourcePanelProps extends ExploreDatasourcePanelBaseP
   Fallback: ComponentType<ExploreDatasourcePanelBaseProps>;
 }
 
+// Modified by ZetaIQ: the dashboard editor's chart picker can be scoped by a folder control.
+export type DashboardSlicesFolderFilter = {
+  col: 'id';
+  opr: 'zeta_path';
+  value: string;
+};
+
+export interface DashboardSlicesFolderProps {
+  /** Re-fetches the picker's charts with these filters added; [] clears them. */
+  onFilter(filters: DashboardSlicesFolderFilter[]): void;
+  /** Ids of the charts the picker lists. */
+  chartIds: number[];
+}
+
 export type Extensions = Partial<{
   'alertsreports.header.icon': ComponentType;
   'load.drillby.options': LoadDrillByOptions;
@@ -269,6 +283,9 @@ export type Extensions = Partial<{
   // Modified by ZetaIQ: a component before the dashboard title (a way back to the list).
   'dashboard.nav.left': ComponentType;
   'dashboard.nav.right': ComponentType;
+  // Modified by ZetaIQ: a control above the dashboard editor's chart list, and a line under each chart's name.
+  'dashboard.slices.folder': ComponentType<DashboardSlicesFolderProps>;
+  'dashboard.slices.itemSubtitle': ComponentType<{ chartId: number }>;
   'home.submenu': ComponentType<SubMenuProps>;
   'navbar.right-menu.item.icon': ComponentType<RightMenuItemIconProps>;
   'navbar.right': ComponentType;

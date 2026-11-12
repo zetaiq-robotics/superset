@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: an optional subtitle under the chart name.
  */
 
 import {
@@ -182,6 +184,7 @@ const AddSliceCard: FC<{
   style?: CSSProperties;
   thumbnailUrl?: string | null;
   visType: string;
+  subtitle?: ReactNode;
 }> = ({
   datasourceUrl,
   datasourceName = '-',
@@ -192,6 +195,7 @@ const AddSliceCard: FC<{
   style = {},
   thumbnailUrl,
   visType,
+  subtitle,
 }) => {
   const showThumbnails = isFeatureEnabled(FeatureFlag.Thumbnails);
   const [sliceAddedBadge, setSliceAddedBadge] = useState<HTMLDivElement>();
@@ -276,6 +280,19 @@ const AddSliceCard: FC<{
                 />
               ) : null}
             </div>
+            {subtitle && (
+              <div
+                css={(theme: Theme) => css`
+                  margin: -${theme.sizeUnit}px 0 ${theme.sizeUnit * 2}px;
+                  font-size: ${theme.fontSizeSM}px;
+                  color: ${theme.colorTextSecondary};
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                `}
+              >
+                {subtitle}
+              </div>
+            )}
             <div
               css={css`
                 display: flex;

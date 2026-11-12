@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: `dashboard.slices.folder` scopes the chart list by extra
+ * filters; `dashboard.slices.itemSubtitle` renders under each chart's name.
  */
 /* eslint-env browser */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -23,6 +26,10 @@ import { List, type RowComponentProps } from 'react-window';
 // @ts-expect-error
 import { createFilter } from 'react-search-input';
 import { t } from '@apache-superset/core/translation';
+import {
+  getExtensionsRegistry,
+  type DashboardSlicesFolderFilter,
+} from '@superset-ui/core';
 import { styled, css, useTheme } from '@apache-superset/core/theme';
 import {
   Button,
@@ -62,7 +69,8 @@ export type SliceAdderProps = {
     userId?: number,
     filter_value?: string,
     sortColumn?: string,
-  ) => Promise<void>;
+    extraFilters?: DashboardSlicesFolderFilter[],
+  ) => Promise<{ payload?: { slices: Record<number, Slice> } } | void>;
   updateSlices: (slices: {
     [id: number]: Slice;
   }) => (dispatch: Dispatch) => void;
@@ -87,6 +95,8 @@ const KEYS_TO_SORT = {
 export const DEFAULT_SORT_KEY = 'changed_on';
 
 const DEFAULT_CELL_HEIGHT = 128;
+// ZetaIQ: room for the `dashboard.slices.itemSubtitle` line.
+const SUBTITLE_HEIGHT = 24;
 
 const Controls = styled.div`
   ${({ theme }) => `
@@ -187,6 +197,9 @@ export function SliceListRow({
   editMode,
 }: RowComponentProps<SliceListRowProps>) {
   const cellData = filteredSlices[index];
+  const ItemSubtitle = getExtensionsRegistry().get(
+    'dashboard.slices.itemSubtitle',
+  );
 
   const isSelected = selectedSliceIdsSet.has(cellData.slice_id);
   const type = CHART_TYPE;
@@ -226,6 +239,9 @@ export function SliceListRow({
           datasourceName={cellData.datasource_name}
           thumbnailUrl={cellData.thumbnail_url}
           isSelected={isSelected}
+          subtitle={
+            ItemSubtitle && <ItemSubtitle chartId={cellData.slice_id} />
+          }
         />
       )}
     </DragDroppable>
@@ -244,7 +260,7 @@ function SliceAdder({
   dashboardId,
 }: SliceAdderProps) {
   const theme = useTheme();
-  const slicesRequestRef = useRef<AbortController | Promise<void>>();
+  const slicesRequestRef = useRef<AbortController | Promise<unknown>>();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState<keyof Slice>(DEFAULT_SORT_KEY);
@@ -272,6 +288,19 @@ function SliceAdder({
     latestSelectedSliceIdsSetRef.current = selectedSliceIdsSet;
   }, [selectedSliceIdsSet]);
 
+  // ZetaIQ: the folder extension's filters, and the ids its latest request
+  // returned (null when unscoped). The store keeps charts from earlier
+  // requests, so a scoped list shows only the ids of the latest one.
+  const FolderExtension = getExtensionsRegistry().get(
+    'dashboard.slices.folder',
+  );
+  const ItemSubtitle = getExtensionsRegistry().get(
+    'dashboard.slices.itemSubtitle',
+  );
+  const folderFiltersRef = useRef<DashboardSlicesFolderFilter[]>([]);
+  const folderRequestRef = useRef(0);
+  const [folderIds, setFolderIds] = useState<Set<number> | null>(null);
+
   const filteredSlices = useMemo(
     () =>
       getFilteredSortedSlices(
@@ -281,8 +310,47 @@ function SliceAdder({
         showOnlyMyCharts,
         userId,
         userSubjects,
-      ),
-    [slices, searchTerm, sortBy, showOnlyMyCharts, userId, userSubjects],
+      ).filter(slice => !folderIds || folderIds.has(slice.slice_id)),
+    [
+      slices,
+      searchTerm,
+      sortBy,
+      showOnlyMyCharts,
+      userId,
+      userSubjects,
+      folderIds,
+    ],
+  );
+  const chartIds = useMemo(
+    () => filteredSlices.map(slice => slice.slice_id),
+    [filteredSlices],
+  );
+
+  // Every picker request goes through here so the folder scope stays applied.
+  const scopedFetchSlices = useCallback(
+    (fetchUserId?: number, filterValue?: string, sortColumn?: string) => {
+      folderRequestRef.current += 1;
+      const folderFilters = folderFiltersRef.current;
+      if (!folderFilters.length) {
+        return fetchSlices(fetchUserId, filterValue, sortColumn);
+      }
+      const request = folderRequestRef.current;
+      const result = fetchSlices(
+        fetchUserId,
+        filterValue,
+        sortColumn,
+        folderFilters,
+      );
+      result.then(action => {
+        if (request === folderRequestRef.current) {
+          setFolderIds(
+            new Set(Object.keys(action?.payload?.slices ?? {}).map(Number)),
+          );
+        }
+      });
+      return result;
+    },
+    [fetchSlices],
   );
 
   const userIdForFetch = useCallback(
@@ -335,10 +403,10 @@ function SliceAdder({
     setSearchTerm(term);
   }, []);
 
-  const fetchSlicesRef = useRef(fetchSlices);
+  const fetchSlicesRef = useRef(scopedFetchSlices);
   useEffect(() => {
-    fetchSlicesRef.current = fetchSlices;
-  }, [fetchSlices]);
+    fetchSlicesRef.current = scopedFetchSlices;
+  }, [scopedFetchSlices]);
 
   // Create the debounce once (stable identity) so a pending search isn't
   // dropped when sortBy/userIdForFetch change mid-typing. The debounced
@@ -366,24 +434,43 @@ function SliceAdder({
   const handleSelect = useCallback(
     (newSortBy: keyof Slice) => {
       setSortBy(newSortBy);
-      slicesRequestRef.current = fetchSlices(
+      slicesRequestRef.current = scopedFetchSlices(
         userIdForFetch(),
         searchTerm,
         newSortBy,
       );
     },
-    [fetchSlices, searchTerm, userIdForFetch],
+    [scopedFetchSlices, searchTerm, userIdForFetch],
   );
 
   const onShowOnlyMyCharts = useCallback(
     (checked: boolean) => {
       if (!checked) {
-        slicesRequestRef.current = fetchSlices(undefined, searchTerm, sortBy);
+        slicesRequestRef.current = scopedFetchSlices(
+          undefined,
+          searchTerm,
+          sortBy,
+        );
       }
       setShowOnlyMyCharts(checked);
       setItem(LocalStorageKeys.DashboardEditorShowOnlyMyCharts, checked);
     },
-    [fetchSlices, searchTerm, sortBy],
+    [scopedFetchSlices, searchTerm, sortBy],
+  );
+
+  const onFolderFilter = useCallback(
+    (filters: DashboardSlicesFolderFilter[]) => {
+      folderFiltersRef.current = filters;
+      if (!filters.length) {
+        setFolderIds(null);
+      }
+      slicesRequestRef.current = scopedFetchSlices(
+        userIdForFetch(),
+        searchTerm,
+        sortBy,
+      );
+    },
+    [scopedFetchSlices, searchTerm, sortBy, userIdForFetch],
   );
 
   const listRowProps = useMemo<SliceListRowProps>(
@@ -462,6 +549,9 @@ function SliceAdder({
           )}
         />
       </div>
+      {FolderExtension && (
+        <FolderExtension onFilter={onFolderFilter} chartIds={chartIds} />
+      )}
       {isLoading && <Loading />}
       {!isLoading && filteredSlices.length > 0 && (
         <ChartList>
@@ -470,7 +560,9 @@ function SliceAdder({
               <List
                 style={{ width, height, maxHeight: height }}
                 rowCount={filteredSlices.length}
-                rowHeight={DEFAULT_CELL_HEIGHT}
+                rowHeight={
+                  DEFAULT_CELL_HEIGHT + (ItemSubtitle ? SUBTITLE_HEIGHT : 0)
+                }
                 rowProps={listRowProps}
                 rowComponent={SliceListRow}
                 rowKey={(index, data) => data.filteredSlices[index].slice_id}

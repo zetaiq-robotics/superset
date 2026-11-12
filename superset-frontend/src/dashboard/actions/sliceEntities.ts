@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: fetchSlices takes extra filters (the chart picker's folder scope).
  */
 import rison from 'rison';
 import { t } from '@apache-superset/core/translation';
@@ -125,6 +127,7 @@ export function fetchSlices(
   userId?: number,
   filter_value?: string,
   sortColumn = 'changed_on',
+  extraFilters: { col: string; opr: string; value: string }[] = [],
 ) {
   return (dispatch: Dispatch) => {
     dispatch(fetchAllSlicesStarted());
@@ -140,6 +143,7 @@ export function fetchSlices(
     if (userId) {
       filters.push({ col: 'id', opr: 'is_editable', value: 1 });
     }
+    filters.push(...extraFilters);
 
     return SupersetClient.get({
       endpoint: `/api/v1/chart/?q=${rison.encode({

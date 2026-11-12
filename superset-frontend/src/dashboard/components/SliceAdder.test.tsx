@@ -15,14 +15,23 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the `dashboard.slices.folder` and
+ * `dashboard.slices.itemSubtitle` extensions.
  */
 import {
+  act,
   fireEvent,
   render,
   screen,
   userEvent,
+  waitFor,
 } from 'spec/helpers/testing-library';
-import { DatasourceType } from '@superset-ui/core';
+import {
+  DatasourceType,
+  getExtensionsRegistry,
+  type DashboardSlicesFolderProps,
+} from '@superset-ui/core';
 import { sliceEntitiesForDashboard as mockSliceEntities } from 'spec/fixtures/mockSliceEntities';
 import { configureStore } from '@reduxjs/toolkit';
 import SliceAdder, {
@@ -290,4 +299,87 @@ describe('SliceAdder', () => {
       screen.queryByText(filteredSlices[0].slice_name),
     ).not.toBeInTheDocument();
   });
+});
+
+// ZetaIQ: a folder control above the list scopes it with extra filters.
+test('the dashboard.slices.folder extension scopes the list with its filters', async () => {
+  const mine = Object.fromEntries(
+    Object.values(mockSliceEntities.slices).map(slice => [
+      slice.slice_id,
+      { ...slice, created_by: { id: 1 } },
+    ]),
+  );
+  const allIds = Object.keys(mine).map(Number);
+  const [kept] = allIds;
+  const fetchSlices = jest.fn().mockResolvedValue({
+    payload: { slices: { [kept]: mine[kept] } },
+  });
+  const seen: DashboardSlicesFolderProps[] = [];
+  getExtensionsRegistry().set('dashboard.slices.folder', props => {
+    seen.push(props);
+    return <div data-test="folder-slot" />;
+  });
+  try {
+    renderSliceAdder({ ...defaultProps, slices: mine, fetchSlices });
+    expect(screen.getByTestId('folder-slot')).toBeInTheDocument();
+    expect(seen[seen.length - 1].chartIds.sort()).toEqual(allIds.sort());
+    // "Show only my charts" is remembered across tests; keep what mount used.
+    const [[uid]] = fetchSlices.mock.calls;
+
+    const filters = [
+      { col: 'id' as const, opr: 'zeta_path' as const, value: 'Plant A' },
+    ];
+    act(() => seen[seen.length - 1].onFilter(filters));
+    expect(fetchSlices).toHaveBeenLastCalledWith(
+      uid,
+      '',
+      'changed_on',
+      filters,
+    );
+    await waitFor(() => expect(seen[seen.length - 1].chartIds).toEqual([kept]));
+
+    act(() => seen[seen.length - 1].onFilter([]));
+    expect(fetchSlices).toHaveBeenLastCalledWith(uid, '', 'changed_on');
+    await waitFor(() =>
+      expect(seen[seen.length - 1].chartIds.sort()).toEqual(allIds.sort()),
+    );
+  } finally {
+    getExtensionsRegistry().set('dashboard.slices.folder', undefined);
+  }
+});
+
+test('no folder control without the dashboard.slices.folder extension', () => {
+  renderSliceAdder();
+  expect(screen.queryByTestId('folder-slot')).not.toBeInTheDocument();
+});
+
+// ZetaIQ: each chart card shows the item subtitle extension under its name.
+test('SliceListRow renders the dashboard.slices.itemSubtitle extension with the chart id', () => {
+  const filteredSlices = Object.values(mockSliceEntities.slices);
+  getExtensionsRegistry().set(
+    'dashboard.slices.itemSubtitle',
+    ({ chartId }) => <span>folder of {chartId}</span>,
+  );
+  try {
+    render(
+      <SliceListRow
+        index={0}
+        style={{}}
+        ariaAttributes={{
+          role: 'listitem',
+          'aria-posinset': 1,
+          'aria-setsize': filteredSlices.length,
+        }}
+        filteredSlices={filteredSlices}
+        selectedSliceIdsSet={new Set()}
+        editMode={false}
+      />,
+      { useDnd: true, store: mockStore },
+    );
+    expect(
+      screen.getByText(`folder of ${filteredSlices[0].slice_id}`),
+    ).toBeInTheDocument();
+  } finally {
+    getExtensionsRegistry().set('dashboard.slices.itemSubtitle', undefined);
+  }
 });
