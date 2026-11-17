@@ -215,3 +215,108 @@ def test_put_repairs_a_stored_layout_that_cannot_be_walked(
     assert json.loads(
         db.session.query(Dashboard).get(dashboard_id).position_json
     ) == json.loads(repaired)
+
+
+def _store_titled_dashboard(mocker: MockerFixture) -> Any:
+    """A real dashboard the request may edit, plus its stub live version."""
+    from superset.models.dashboard import Dashboard
+    from superset.versioning.api_helpers import EntityVersionInfo
+
+    # ``full_api_access`` stops at the route decorators, so the row filter and
+    # the editorship check still need a user the request does not have.
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+    mocker.patch.object(security_manager, "raise_for_editorship")
+    dashboard = db.session.query(Dashboard).get(_store_dashboard("{}"))
+    version_info = mocker.patch(
+        "superset.dashboards.api.current_entity_version_info",
+        return_value=EntityVersionInfo(
+            version=1,
+            transaction_id=2,
+            version_uuid="live",
+            entity_uuid=dashboard.uuid,
+        ),
+    )
+    return dashboard, version_info
+
+
+def _stored_title(dashboard_id: int) -> str:
+    from superset.models.dashboard import Dashboard
+
+    db.session.expire_all()
+    return db.session.query(Dashboard).get(dashboard_id).dashboard_title
+
+
+def test_put_dashboard_rejects_stale_if_match(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A PUT carrying an ``If-Match`` from an older version is refused with 412."""
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    dashboard_id = dashboard.id
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard_id}",
+        json={"dashboard_title": "from a stale tab"},
+        headers={"If-Match": '"old"'},
+    )
+
+    assert response.status_code == 412
+    assert response.json == {
+        "message": (
+            "The dashboard was changed by another user or browser tab after you "
+            "opened it. Reopen it to pick up the latest version, then reapply "
+            "your changes."
+        )
+    }
+    assert response.headers["ETag"] == '"live"'
+    # A conditional write must ask for the locking validator read.
+    assert version_info.call_args.kwargs["lock_for_stale_check"] is True
+    assert _stored_title(dashboard_id) == "broken layout"
+
+
+@pytest.mark.parametrize("tag", ['"live"', '"live:zstd"'])
+def test_put_dashboard_accepts_current_if_match(
+    tag: str,
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """``If-Match`` equal to the live version (bare or compressed form) saves."""
+    dashboard, _ = _store_titled_dashboard(mocker)
+    dashboard_id = dashboard.id
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard_id}",
+        json={"dashboard_title": "current tab"},
+        headers={"If-Match": tag},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert _stored_title(dashboard_id) == "current tab"
+
+
+def test_put_dashboard_without_if_match_still_saves(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """An unconditional PUT saves and takes no locks or locking validator read."""
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    dashboard_id = dashboard.id
+    lock = mocker.patch("superset.dashboards.api.lock_entity_for_update")
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard_id}",
+        json={"dashboard_title": "plain save"},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    lock.assert_not_called()
+    # First call is the pre-command read carrying the flag; the post-command
+    # new_info read passes none.
+    assert version_info.call_args_list[0].kwargs["lock_for_stale_check"] is False
+    assert _stored_title(dashboard_id) == "plain save"

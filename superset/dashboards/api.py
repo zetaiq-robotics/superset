@@ -184,13 +184,21 @@ from superset.utils.screenshots import (
 )
 from superset.utils.urls import get_url_path
 from superset.versioning.api_helpers import (
+    command_lost_lock_race,
     current_entity_etag_uuid,
     current_entity_version_info,
+    EntityVersionInfo,
     get_version_endpoint,
+    guard_conditional_write,
     list_versions_endpoint,
+    lock_contention_response,
+    lock_entity_for_update,
     restore_version_endpoint,
 )
-from superset.versioning.etag import set_version_etag
+from superset.versioning.etag import (
+    raise_for_stale_write,
+    set_version_etag,
+)
 from superset.versioning.schemas import VersionListItemSchema
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
@@ -1067,6 +1075,17 @@ class DashboardRestApi(
               $ref: '#/components/responses/403'
             404:
               $ref: '#/components/responses/404'
+            409:
+              description: >-
+                A concurrent save on this dashboard won a database lock
+                race. The ``If-Match`` token is not proven stale: retry
+                the SAME request.
+            412:
+              description: >-
+                The dashboard changed since the version named by the
+                ``If-Match`` header; nothing was saved. The ``ETag``
+                header carries the live version. Reopen the dashboard
+                before saving again.
             422:
               $ref: '#/components/responses/422'
             500:
@@ -1078,9 +1097,28 @@ class DashboardRestApi(
         except ValidationError as error:
             return self.response_400(message=error.messages)
 
-        # Live version identifiers before the update (empty + query-free when
-        # ``ENABLE_VERSIONING_CAPTURE`` is off).
-        old_info = current_entity_version_info(Dashboard, pk)
+        # Optimistic concurrency: If-Match → entity lock, locked version read,
+        # 409 on a lost lock race, 412 on a stale token (see
+        # guard_conditional_write). The locked functions are passed from this
+        # module so tests patching them here still intercept the guard.
+        guarded = guard_conditional_write(
+            self,
+            Dashboard,
+            pk,
+            noun="dashboard",
+            stale_message=gettext(
+                "The dashboard was changed by another user or browser tab "
+                "after you opened it. Reopen it to pick up the latest "
+                "version, then reapply your changes."
+            ),
+            lock=lock_entity_for_update,
+            read_version=current_entity_version_info,
+            check_stale=raise_for_stale_write,
+        )
+        if not isinstance(guarded, EntityVersionInfo):
+            return guarded
+        # Held until the command has run: it carries the locked entity.
+        old_info: EntityVersionInfo = guarded
 
         try:
             changed_model = UpdateDashboardCommand(pk, item).run()
@@ -1112,6 +1150,11 @@ class DashboardRestApi(
         except DashboardInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except DashboardUpdateFailedError as ex:
+            # A deadlock at the version-row INSERT inside the command arrives
+            # chained as ``__cause__``; on a conditional save it is the same
+            # retryable 409, not a 422.
+            if command_lost_lock_race(ex):
+                return lock_contention_response(self, "dashboard")
             logger.error(
                 "Error updating model %s: %s",
                 self.__class__.__name__,

@@ -32,7 +32,6 @@ from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import gettext as _, ngettext
 from jinja2.exceptions import TemplateError
 from marshmallow import ValidationError
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm.exc import MultipleResultsFound
 
 from superset import db, event_logger, is_feature_enabled, security_manager
@@ -114,21 +113,21 @@ from superset.utils.core import (
     write_zip_entry,
 )
 from superset.versioning.api_helpers import (
+    command_lost_lock_race,
     concurrency_token_from,
     current_entity_version_info,
     entity_concurrency_token,
     EntityVersionInfo,
     get_version_endpoint,
+    guard_conditional_write,
     list_versions_endpoint,
+    lock_contention_response,
     lock_entity_for_update,
     restore_version_endpoint,
 )
-from superset.versioning.db_errors import is_lock_contention_error
 from superset.versioning.etag import (
-    is_conditional_write,
     raise_for_stale_write,
     set_version_etag,
-    StaleEntityError,
 )
 from superset.versioning.schemas import VersionListItemSchema
 from superset.views.base import DatasourceFilter
@@ -578,28 +577,6 @@ class DatasetRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
             logger.exception("Unexpected error in DatasetRestApi.post")
             return self.response_500(message="Fatal error")
 
-    def _lock_contention_response(self) -> Response:
-        """The shared retryable 409 for a conditional save losing a lock race.
-
-        In the direct lock-acquisition and validator-read catches, the
-        rollback is LOAD-BEARING for lock-wait-timeout: with
-        ``innodb_rollback_on_timeout`` OFF (the MySQL default) a 1205
-        rolls back only the failing STATEMENT -- the transaction is still
-        alive and still holds any entity row lock already acquired, and
-        this rollback is what releases it. For a deadlock (1213) InnoDB
-        already rolled the transaction back and this clears the aborted
-        session before responding. The decorated command-failure path
-        already rolls back before raising; this shared cleanup is a
-        harmless no-op on that path, not an additional required rollback.
-        """
-        db.session.rollback()  # pylint: disable=consider-using-transaction
-        return self.response(
-            409,
-            message=_(
-                "Another save is in progress for this dataset. Retry the same request."
-            ),
-        )
-
     @expose("/<pk>", methods=("PUT",))
     @protect()
     @statsd_metrics
@@ -755,67 +732,28 @@ class DatasetRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
         except ValidationError as error:
             return self.response_400(message=error.messages)
 
-        # Serialise conditional saves on this dataset: the guard below reads
-        # the live version, the command writes, and the two must not interleave
-        # with another request's. Only a conditional save pays for the locks; an
-        # unconditional PUT behaves exactly as it did before the guard existed.
-        # The validator's transaction id uses a locking read. The displayed
-        # version number and lazy child reads can still observe an older
-        # MySQL REPEATABLE READ snapshot; see lock_entity_for_update.
-        conditional: bool = is_conditional_write()
-        if conditional:
-            # Blocking here is the serialisation doing its job; LOSING the
-            # race at this acquisition (deadlock, or lock-wait timeout
-            # after ``innodb_lock_wait_timeout``) is the most common
-            # contention outcome of all three lock points and maps to the
-            # same retryable 409 -- not an uncaught 500. The locked entity
-            # is HELD for the rest of the request: the session's identity
-            # map references clean objects weakly, so discarding the
-            # return value could let the refreshed object be collected and
-            # the command's find_by_id re-read a stale row on MySQL
-            # REPEATABLE READ (see lock_entity_for_update).
-            try:
-                _locked_entity: SqlaTable | None = lock_entity_for_update(SqlaTable, pk)
-            except OperationalError as ex:
-                if not is_lock_contention_error(ex):
-                    raise
-                return self._lock_contention_response()
-
-        # Live version identifiers before the update (empty + query-free when
-        # ``ENABLE_VERSIONING_CAPTURE`` is off). On the conditional path the
-        # live transaction id is read under an exclusive row lock: a plain
-        # read is served from the request's REPEATABLE READ snapshot on MySQL
-        # and can miss a concurrent commit, letting a stale If-Match token
-        # pass the guard. A lock race lost at that read (deadlock / lock
-        # wait) proves concurrent CONTENTION, not that this request's token
-        # is stale — so it maps to a retryable 409, and the client should
-        # retry the SAME request. (A deadlock at Continuum's version-row
-        # insert inside the command is classified by the
-        # DatasetUpdateFailedError handler below via ``__cause__`` and
-        # returns the same 409.)
-        try:
-            old_info: EntityVersionInfo = current_entity_version_info(
-                SqlaTable, pk, lock_for_stale_check=conditional
-            )
-        except OperationalError as ex:
-            if not (conditional and is_lock_contention_error(ex)):
-                raise
-            return self._lock_contention_response()
-
-        try:
-            raise_for_stale_write(concurrency_token_from(old_info))
-        except StaleEntityError:
-            return set_version_etag(
-                self.response(
-                    412,
-                    message=_(
-                        "The dataset was changed by another user or browser tab "
-                        "after you opened it. Reopen it to pick up the latest "
-                        "version, then reapply your changes."
-                    ),
-                ),
-                concurrency_token_from(old_info),
-            )
+        # Optimistic concurrency: If-Match → entity lock, locked version read,
+        # 409 on a lost lock race, 412 on a stale token (see
+        # guard_conditional_write). The locked functions are passed from this
+        # module so tests patching them here still intercept the guard.
+        guarded = guard_conditional_write(
+            self,
+            SqlaTable,
+            pk,
+            noun="dataset",
+            stale_message=_(
+                "The dataset was changed by another user or browser tab "
+                "after you opened it. Reopen it to pick up the latest "
+                "version, then reapply your changes."
+            ),
+            lock=lock_entity_for_update,
+            read_version=current_entity_version_info,
+            check_stale=raise_for_stale_write,
+        )
+        if not isinstance(guarded, EntityVersionInfo):
+            return guarded
+        # Held until the command has run: it carries the locked entity.
+        old_info: EntityVersionInfo = guarded
 
         try:
             # Two commands, two commits, two Continuum transactions for an
@@ -875,16 +813,12 @@ class DatasetRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
             )
             response = self.response_422(message=str(ex))
         except DatasetUpdateFailedError as ex:
-            # The gap lock the conditional path's locking read takes on a
-            # zero-live-row range can deadlock against another conditional
-            # writer at Continuum's version-row INSERT inside the command;
-            # on_error chains the driver error as __cause__, and the update
-            # transaction has rolled back. (The post-commit override_columns
-            # refresh raises its own exception type and cannot reach this
-            # branch.) Same retryable classification as the read-point
-            # handler above: the token is not proven stale.
-            if conditional and is_lock_contention_error(ex.__cause__):
-                return self._lock_contention_response()
+            # A deadlock at Continuum's version-row INSERT is the guard's
+            # retryable 409 (see command_lost_lock_race). The post-commit
+            # override_columns refresh raises its own exception type and
+            # cannot reach this branch.
+            if command_lost_lock_race(ex):
+                return lock_contention_response(self, "dataset")
             logger.error(
                 "Error updating model %s: %s",
                 self.__class__.__name__,
