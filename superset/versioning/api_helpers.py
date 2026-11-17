@@ -45,6 +45,7 @@ from flask import Response
 from flask_appbuilder import Model
 from flask_babel import gettext as _
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import lazyload
 
 from superset.daos.version import VersionDAO
 from superset.exceptions import SupersetSecurityException
@@ -280,6 +281,13 @@ def lock_entity_for_update(
 
     Renders no ``FOR UPDATE`` on SQLite, which serialises writers anyway.
 
+    Relationships are forced lazy (``lazyload("*")``) so the lock is one
+    single-table ``SELECT``. A model's eager load (``Slice.table`` is
+    ``lazy="subquery"``) would otherwise re-issue the locking query as a
+    ``SELECT DISTINCT ... FOR NO KEY UPDATE`` subquery, which Postgres
+    rejects. Relationships still load on first access, inside the same
+    transaction, as plain reads like the child collections above.
+
     Missing rows are not this function's concern: ``None`` is returned
     (soft-deleted rows filter out like any ORM read), and existence keeps
     being decided by the update command's own lookup (404 semantics
@@ -293,6 +301,7 @@ def lock_entity_for_update(
         return None
     return (
         db.session.query(model_cls)
+        .options(lazyload("*"))
         .populate_existing()
         .filter(model_cls.id == entity_id)
         .with_for_update(key_share=True)

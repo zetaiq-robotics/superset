@@ -22,7 +22,9 @@ import { t } from '@apache-superset/core/translation';
 import {
   saveDashboardRequest,
   setStaleSave,
+  setUnsavedChanges,
 } from 'src/dashboard/actions/dashboardState';
+import { armUnsavedChangesPrompt } from 'src/dashboard/util/unsavedChangesPrompt';
 import { DashboardState, RootState } from 'src/dashboard/types';
 import {
   SAVE_TYPE_NEWDASHBOARD,
@@ -92,6 +94,8 @@ export function StaleSaveModal({
 }
 
 const reloadWithoutEdits = () => {
+  // the person chose to drop the edits: no "Leave site?" asking again
+  armUnsavedChangesPrompt(false);
   const url = new URL(window.location.href);
   url.searchParams.delete('edit');
   window.location.assign(url);
@@ -116,7 +120,11 @@ export default function DashboardStaleSave() {
       summary={summary}
       saving={saving}
       onHide={close}
-      onDiscard={reloadWithoutEdits}
+      onDiscard={() => {
+        // before the reload: the dashboard's effect must not re-arm the prompt
+        dispatch(setUnsavedChanges(false));
+        reloadWithoutEdits();
+      }}
       onCopy={
         data &&
         (() => {

@@ -19,13 +19,14 @@
 import { t, tn } from '@apache-superset/core/translation';
 import { SupersetClient } from '@superset-ui/core';
 import { extendedDayjs } from '@superset-ui/core/utils/dates';
+import getBootstrapData from 'src/utils/getBootstrapData';
 
 /** One item of `GET /api/v1/{dashboard,chart}/<uuid>/versions/`. */
 export type VersionEntry = {
   version_uuid: string;
   issued_at?: string;
   operation_type?: string;
-  changed_by?: { first_name?: string } | null;
+  changed_by?: { id?: number; first_name?: string } | null;
   changes?: {
     path: (string | number)[];
     operation?: string;
@@ -157,7 +158,14 @@ export async function loadStaleSummary(
         endpoint: `/api/v1/${resource}/${uuid}/versions/`,
       });
       const versions: VersionEntry[] = json?.result ?? [];
-      const last = newerThan(versions, since).pop();
+      const newer = newerThan(versions, since);
+      // Name whoever else saved: the refused person's own small saves since
+      // their base (e.g. a filter) are not the conflict. Only own saves
+      // (another tab of theirs): name the newest, as before.
+      const me = getBootstrapData().user?.userId;
+      const last =
+        newer.filter(v => me == null || v.changed_by?.id !== me).pop() ??
+        newer.pop();
       if (last) {
         return {
           changedBy: authorOf(last),

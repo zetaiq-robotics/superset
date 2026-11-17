@@ -30,8 +30,10 @@ refactor (a 2.0-style ``select()``, reordered chaining) should update the
 pinned chain -- but never drop ``populate_existing`` or ``with_for_update``.
 """
 
+from typing import Any, Callable
 from unittest.mock import MagicMock
 
+import pytest
 from pytest_mock import MockerFixture
 
 from superset.versioning.api_helpers import lock_entity_for_update
@@ -61,7 +63,9 @@ def test_lock_is_a_populating_locking_read(mocker: MockerFixture) -> None:
     result = lock_entity_for_update(model_cls, 42)
 
     db.session.query.assert_called_once_with(model_cls)
-    query = db.session.query.return_value
+    # lazyload("*"): no eager load may wrap the lock in a DISTINCT subquery
+    db.session.query.return_value.options.assert_called_once()
+    query = db.session.query.return_value.options.return_value
     query.populate_existing.assert_called_once_with()
     populated = query.populate_existing.return_value
     # Arity-only on purpose: with a MagicMock model the criterion
@@ -96,3 +100,80 @@ def test_missing_id_skips_the_lock(mocker: MockerFixture) -> None:
     lock_entity_for_update(MagicMock(), None)
 
     db.session.query.assert_not_called()
+
+
+def _locking_sql_on_postgres(session: Any, entity: Any) -> list[str]:
+    """Run the lock on a stored *entity*; return every ORM statement it
+    emits, compiled for PostgreSQL -- the backend that rejects a row lock
+    inside a ``DISTINCT`` subquery, which SQLite's no-op lock hides."""
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+
+    entity.metadata.create_all(session.get_bind())
+    session.add(entity)
+    session.flush()
+    model_cls, entity_id = type(entity), entity.id
+    session.expunge_all()
+
+    seen: list[str] = []
+
+    def capture(state: Any) -> None:
+        seen.append(str(state.statement.compile(dialect=postgresql.dialect())))
+
+    event.listen(session, "do_orm_execute", capture)
+    try:
+        assert lock_entity_for_update(model_cls, entity_id) is not None
+    finally:
+        event.remove(session, "do_orm_execute", capture)
+    return seen
+
+
+def _dashboard() -> Any:
+    from superset.models.dashboard import Dashboard
+
+    return Dashboard(dashboard_title="d")
+
+
+def _chart() -> Any:
+    from superset.models.slice import Slice
+
+    return Slice(
+        slice_name="c",
+        datasource_type="table",
+        datasource_id=1,
+        viz_type="table",
+        params="{}",
+    )
+
+
+def _dataset() -> Any:
+    from superset.connectors.sqla.models import SqlaTable
+    from superset.models.core import Database
+
+    return SqlaTable(
+        table_name="t", database=Database(database_name="d", sqlalchemy_uri="sqlite://")
+    )
+
+
+@pytest.mark.parametrize(
+    ("make", "table"),
+    [(_dashboard, "dashboards"), (_chart, "slices"), (_dataset, "tables")],
+)
+def test_lock_is_one_single_table_select_on_postgres(
+    session: Any, make: Callable[[], Any], table: str
+) -> None:
+    """The lock is exactly one ``SELECT ... FROM <table> ... FOR NO KEY UPDATE``.
+
+    An eager relationship load (``Slice.table`` is ``lazy="subquery"``) makes
+    SQLAlchemy re-issue the locking query as ``(SELECT DISTINCT ... FOR NO KEY
+    UPDATE) AS anon_1``, which Postgres refuses: every chart PUT with
+    ``If-Match`` was a 500. Relationships must load lazily, after the lock.
+    """
+    seen = _locking_sql_on_postgres(session, make())
+
+    assert len(seen) == 1, "\n\n".join(seen)
+    sql = seen[0]
+    assert "FOR NO KEY UPDATE" in sql
+    assert "DISTINCT" not in sql
+    assert "anon_" not in sql
+    assert f"\nFROM {table} \nWHERE {table}.id = " in sql

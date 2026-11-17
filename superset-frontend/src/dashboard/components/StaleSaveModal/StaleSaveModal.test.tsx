@@ -30,6 +30,7 @@ import mockDashboardData from 'spec/fixtures/mockDashboardData';
 import { saveDashboardRequest } from 'src/dashboard/actions/dashboardState';
 import { SAVE_TYPE_OVERWRITE } from 'src/dashboard/util/constants';
 import { navigateTo } from 'src/utils/navigationUtils';
+import { armUnsavedChangesPrompt } from 'src/dashboard/util/unsavedChangesPrompt';
 import DashboardStaleSave, { StaleSaveModal } from '.';
 
 jest.mock('src/utils/navigationUtils', () => ({
@@ -257,11 +258,23 @@ test('an Overwrite that fails leaves the base, so the next Save is still refused
   ]);
 });
 
+// A pending "Leave site?" prompt: dispatch the event the browser would.
+const leavePromptArmed = () => {
+  const event = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+};
+
 test('without the history, Discard reloads the dashboard out of edit mode', async () => {
   failedHistory();
-  const { save } = setup();
+  const { save, store } = setup();
   const original = window.location;
-  const assign = jest.fn();
+  // the dashboard armed it for the unsaved edits being discarded
+  armUnsavedChangesPrompt(true);
+  let armedAtReload: boolean | undefined;
+  const assign = jest.fn(() => {
+    armedAtReload = leavePromptArmed();
+  });
   Object.defineProperty(window, 'location', {
     configurable: true,
     value: { href: 'http://localhost/superset/dashboard/1/?edit=true', assign },
@@ -278,6 +291,10 @@ test('without the history, Discard reloads the dashboard out of edit mode', asyn
   expect(String(assign.mock.calls[0][0])).toBe(
     'http://localhost/superset/dashboard/1/',
   );
+  // the person chose to discard: no "Leave site?" asking again
+  expect(armedAtReload).toBe(false);
+  expect(store.getState().dashboardState.hasUnsavedChanges).toBe(false);
+  armUnsavedChangesPrompt(false);
   Object.defineProperty(window, 'location', {
     configurable: true,
     value: original,
@@ -306,6 +323,8 @@ test('without the history, Save as a copy uses save-as; the copy is a Draft', as
   await waitFor(() =>
     expect(screen.queryByText(TITLE)).not.toBeInTheDocument(),
   );
+  // the original is left alone: only the refused save ever PUT it
+  expect(log.filter(c => c.method === 'PUT')).toHaveLength(1);
 });
 
 test('without the history, Overwrite re-reads the version and resends', async () => {
