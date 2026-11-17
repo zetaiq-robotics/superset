@@ -114,6 +114,7 @@ fetchMock.get('glob:*/api/v1/chart/318*', {
     ],
     show_title: 'Show Slice',
   },
+  headers: { ETag: '"v2"' },
 });
 
 fetchMock.put('glob:*/api/v1/chart/318', {
@@ -144,6 +145,18 @@ afterAll(() => {
 
 const renderModal = (props: PropertiesModalProps) =>
   render(<PropertiesModal {...props} />, { useRedux: true });
+
+// the modal's read on open has landed: fields filled, version loaded
+const waitForLoad = () =>
+  waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled(),
+  );
+
+const lastPut = () =>
+  fetchMock.callHistory
+    .calls('glob:*/api/v1/chart/318')
+    .filter(c => c.options?.method?.toUpperCase() === 'PUT')
+    .pop();
 
 test('Should render null when show:false', async () => {
   const props = createProps();
@@ -299,6 +312,7 @@ test('saving properties adopts the chart version the save created', async () => 
 test('"Name" should not be empty', async () => {
   const props = createProps();
   renderModal(props);
+  await waitForLoad();
 
   const name = screen.getByRole('textbox', { name: 'Name' });
 
@@ -316,6 +330,7 @@ test('"Name" should not be empty', async () => {
 test('"Name" should not be empty when saved', async () => {
   const props = createProps();
   renderModal(props);
+  await waitForLoad();
 
   const name = screen.getByRole('textbox', { name: 'Name' });
 
@@ -337,6 +352,7 @@ test('"Name" should not be empty when saved', async () => {
 test('"Cache timeout" should not be empty when saved', async () => {
   const props = createProps();
   renderModal(props);
+  await waitForLoad();
 
   // Expand the Configuration section first to access cache timeout
   const configPanel = screen.getByText('Configuration').closest('[role="tab"]');
@@ -366,9 +382,7 @@ test('"Description" should not be empty when saved', async () => {
   renderModal(props);
 
   // Wait for modal to be ready
-  await waitFor(() => {
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-  });
+  await waitForLoad();
 
   // Find the description textarea (it's the second textbox, as Name is the first)
   const textboxes = screen.getAllByRole('textbox');
@@ -437,13 +451,108 @@ test('Should show Viewers picker when ENABLE_VIEWERS is on', async () => {
 test('certification is not offered, and saving leaves it as it was', async () => {
   const props = createProps();
   renderModal(props);
-  expect(screen.queryByRole('textbox', { name: 'Certified by' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('textbox', { name: 'Certification details' })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('textbox', { name: 'Certified by' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('textbox', { name: 'Certification details' }),
+  ).not.toBeInTheDocument();
+  await waitForLoad();
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(props.onSave).toHaveBeenCalled());
-  const sent = JSON.parse(String(fetchMock.callHistory.calls('glob:*/api/v1/chart/318').filter(c => c.options?.method?.toUpperCase() === 'PUT').pop()?.options?.body));
-  expect(sent).toMatchObject({ certified_by: 'John Doe', certification_details: 'Sample certification' });
+  // as stored now (the read on open), not the caller's older copy
+  expect(JSON.parse(String(lastPut()?.options?.body))).toMatchObject({
+    certified_by: 'Test certified by',
+    certification_details: 'Test certification details',
+  });
 });
+
+test('the fields come from the same read as the version the save is checked against', async () => {
+  const props = createProps();
+  props.slice.slice_name = 'Old';
+  renderModal(props);
+
+  // the read on open answers "Test chart new name" with ETag v2
+  await waitFor(() =>
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue(
+      'Test chart new name',
+    ),
+  );
+  await waitForLoad();
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(props.onSave).toHaveBeenCalled());
+  const put = lastPut();
+  expect(
+    new Headers(put?.options?.headers as HeadersInit).get('If-Match'),
+  ).toBe('"v2"');
+  expect(JSON.parse(String(put?.options?.body))).toMatchObject({
+    slice_name: 'Test chart new name',
+    description: 'Test description',
+    cache_timeout: 1000,
+    certified_by: 'Test certified by',
+    certification_details: 'Test certification details',
+  });
+});
+
+test('Save stays disabled until the read on open has loaded the version', async () => {
+  const { get } = SupersetClient;
+  let release = () => {};
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const getSpy = jest
+    .spyOn(SupersetClient, 'get')
+    .mockImplementation((request: any) =>
+      request.endpoint?.includes('?q=')
+        ? gate.then(() => get(request))
+        : get(request),
+    );
+  renderModal(createProps());
+  await waitFor(() => expect(getSpy).toHaveBeenCalled());
+
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: 'Name' })).toBeDisabled();
+
+  release();
+  await waitForLoad();
+  expect(screen.getByRole('textbox', { name: 'Name' })).toBeEnabled();
+  getSpy.mockRestore();
+});
+
+test.each(['fails', 'carries no ETag'])(
+  'a read on open that %s keeps Save disabled and sends no PUT',
+  async scenario => {
+    const { get } = SupersetClient;
+    const getSpy = jest
+      .spyOn(SupersetClient, 'get')
+      .mockImplementation((request: any) => {
+        if (!request.endpoint?.includes('?q=')) return get(request);
+        return scenario === 'fails'
+          ? Promise.reject(new Response('{}', { status: 500 }))
+          : get(request).then((r: any) => ({
+              json: r.json,
+              response: new Response('{}'),
+            }));
+      });
+    const put = jest.spyOn(SupersetClient, 'put');
+    const store = createStore({}, reducerIndex);
+    render(<PropertiesModal {...createProps()} />, { useRedux: true, store });
+
+    await waitFor(() =>
+      expect(
+        store
+          .getState()
+          .messageToasts.filter(
+            (toast: any) => toast.toastType === ToastType.Danger,
+          ),
+      ).toHaveLength(1),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(put).not.toHaveBeenCalled();
+    [getSpy, put].forEach(spy => spy.mockRestore());
+  },
+);
 
 // The modal's GET on open answers v5; any later read of the chart (the
 // Overwrite's fresh read) answers `fresh` (null: no ETag). The PUTs are
@@ -487,7 +596,9 @@ const staleChartProperties = async (
     dangerToasts: () =>
       store
         .getState()
-        .messageToasts.filter((toast: any) => toast.toastType === ToastType.Danger),
+        .messageToasts.filter(
+          (toast: any) => toast.toastType === ToastType.Danger,
+        ),
     ifMatches: () =>
       put.mock.calls.map(([req]: any) => req.headers?.['If-Match']),
     restore: () => [getSpy, put].forEach(spy => spy.mockRestore()),

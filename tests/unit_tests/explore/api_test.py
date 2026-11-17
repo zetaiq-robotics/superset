@@ -144,14 +144,14 @@ def _explore_tab(session: Any, mocker: Any) -> tuple[Any, Any, Any]:
     )
     db.session.add(chart)
     db.session.flush()
-    live = {"token": "A"}
+    live = {"version": "A"}
     for module in (
         "superset.commands.explore.get",
         "superset.commands.explore.form_data.create",
     ):
         mocker.patch(
             f"{module}.entity_concurrency_token",
-            side_effect=lambda *_: live["token"],
+            side_effect=lambda *_: live["version"],
             create=True,
         )
     return chart, live, cache_manager
@@ -195,7 +195,7 @@ def test_restored_unsaved_edits_keep_the_version_they_started_from(
         f"/api/v1/explore/form_data/{key}?tab_id=1", json=_form_data(chart)
     )
     assert edited.status_code == 200, edited.get_data(as_text=True)
-    live["token"] = "B"  # someone else saves the chart
+    live["version"] = "B"  # someone else saves the chart
 
     base = _restored_version(client, chart, key)
 
@@ -226,7 +226,7 @@ def test_restore_after_the_tabs_own_save_has_the_new_version(
     chart, live, _ = _explore_tab(session, mocker)
     created = client.post("/api/v1/explore/form_data?tab_id=1", json=_form_data(chart))
     key = created.json["key"]
-    live["token"] = NEW_VERSION  # this tab's own overwrite
+    live["version"] = NEW_VERSION  # this tab's own overwrite
 
     rewritten = client.post(
         "/api/v1/explore/form_data?tab_id=1",
@@ -245,6 +245,6 @@ def test_cache_entry_from_before_the_stored_version_restores_the_live_one(
     created = client.post("/api/v1/explore/form_data?tab_id=1", json=_form_data(chart))
     key = created.json["key"]
     cache_manager.explore_form_data_cache.get(key).pop("version_uuid", None)
-    live["token"] = "B"
+    live["version"] = "B"
 
     assert _restored_version(client, chart, key) == "B"

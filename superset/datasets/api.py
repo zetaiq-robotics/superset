@@ -34,7 +34,7 @@ from jinja2.exceptions import TemplateError
 from marshmallow import ValidationError
 from sqlalchemy.orm.exc import MultipleResultsFound
 
-from superset import db, event_logger, is_feature_enabled, security_manager
+from superset import event_logger, is_feature_enabled, security_manager
 from superset.commands.dataset.create import CreateDatasetCommand
 from superset.commands.dataset.delete import DeleteDatasetCommand
 from superset.commands.dataset.duplicate import DuplicateDatasetCommand

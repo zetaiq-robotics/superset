@@ -85,6 +85,42 @@ const mockIsFeatureEnabled = isFeatureEnabled as jest.Mock;
 const mockNavigateTo = navigateTo as jest.Mock;
 const mockNavigateWithState = navigateWithState as jest.Mock;
 
+// Real thunks against the real dashboardInfo reducer, so a write's version
+// pair goes through the same path the app takes before the next full save.
+function liveStore(versions: { base: string | null; latest: string | null }) {
+  let state: Record<string, any> = {
+    dashboardState: {
+      sliceIds: [filterId],
+      hasUnsavedChanges: true,
+      labelsColorMapMustSync: true,
+    },
+    dashboardInfo: {
+      id: 1,
+      metadata: { color_scheme: 'supersetColors' },
+      versions,
+    },
+    sliceEntities,
+    dashboardFilters: emptyFilters,
+    dashboardLayout: {
+      past: [],
+      present: mockDashboardData.positions,
+      future: {},
+    },
+    charts: {},
+    nativeFilters: { filters: {} },
+  };
+  const getState = () => state as any;
+  const dispatch: any = (action: any) => {
+    if (typeof action === 'function') return action(dispatch, getState);
+    state = {
+      ...state,
+      dashboardInfo: dashboardInfoReducer(state.dashboardInfo, action),
+    };
+    return action;
+  };
+  return { dispatch, getState };
+}
+
 // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks
 describe('dashboardState actions', () => {
   const mockState = {
@@ -1185,42 +1221,6 @@ describe('dashboardState actions', () => {
 // ---------------------------------------------------------------------------
 // Base version and If-Match (live dashboards)
 // ---------------------------------------------------------------------------
-
-// Real thunks against the real dashboardInfo reducer, so a write's version
-// pair goes through the same path the app takes before the next full save.
-function liveStore(versions: { base: string | null; latest: string | null }) {
-  let state: Record<string, any> = {
-    dashboardState: {
-      sliceIds: [filterId],
-      hasUnsavedChanges: true,
-      labelsColorMapMustSync: true,
-    },
-    dashboardInfo: {
-      id: 1,
-      metadata: { color_scheme: 'supersetColors' },
-      versions,
-    },
-    sliceEntities,
-    dashboardFilters: emptyFilters,
-    dashboardLayout: {
-      past: [],
-      present: mockDashboardData.positions,
-      future: {},
-    },
-    charts: {},
-    nativeFilters: { filters: {} },
-  };
-  const getState = () => state as any;
-  const dispatch: any = (action: any) => {
-    if (typeof action === 'function') return action(dispatch, getState);
-    state = {
-      ...state,
-      dashboardInfo: dashboardInfoReducer(state.dashboardInfo, action),
-    };
-    return action;
-  };
-  return { dispatch, getState };
-}
 
 // `request` carries the makeApi writes (filters, customizations,
 // cross-filter settings); `put` the direct ones (save, published, colours).

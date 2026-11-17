@@ -282,6 +282,9 @@ def _version_pair_response(
         new_token = concurrency_token_from(new_info)
     except SQLAlchemyError:
         logger.exception("Reading the version after a dashboard write failed")
+        # the write has committed; clear the aborted transaction so the
+        # request's later writes (the action log) can still run
+        db.session.rollback()  # pylint: disable=consider-using-transaction
         new_token = None
     return set_version_etag(
         api.response(
@@ -1319,9 +1322,7 @@ class DashboardRestApi(
             return old_info
         try:
             configuration = UpdateDashboardNativeFiltersCommand(pk, item).run()
-            response = _version_pair_response(
-                self, pk, old_info, result=configuration
-            )
+            response = _version_pair_response(self, pk, old_info, result=configuration)
         except DashboardNotFoundError:
             response = self.response_404()
         except DashboardForbiddenError:
@@ -1420,9 +1421,7 @@ class DashboardRestApi(
             return old_info
         try:
             configuration = UpdateDashboardChartCustomizationsCommand(pk, item).run()
-            response = _version_pair_response(
-                self, pk, old_info, result=configuration
-            )
+            response = _version_pair_response(self, pk, old_info, result=configuration)
         except DashboardNotFoundError:
             response = self.response_404()
         except DashboardForbiddenError:

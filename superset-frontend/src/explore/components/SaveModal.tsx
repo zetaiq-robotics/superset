@@ -545,6 +545,7 @@ const SaveModal = ({
         // does not travel through form_data -- create/updateSlice receive it
         // as an explicit argument.
         const formData = form_data || {};
+        // oxlint-disable-next-line react/immutability -- upstream mutation, kept as is
         delete formData.url_params;
         actions.setFormData({ ...formData });
 

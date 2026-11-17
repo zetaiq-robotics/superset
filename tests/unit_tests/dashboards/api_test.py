@@ -536,11 +536,13 @@ def test_if_match_with_access_suffix_still_matches(
     if compressed:
         tag = _get_dashboard_etag(client, dashboard_id, **{"Accept-Encoding": "zstd"})
         # The compression layer appends the content coding to the tag.
-        assert tag.startswith("live:") and tag.endswith(":zstd")
+        assert tag.startswith("live:")
+        assert tag.endswith(":zstd")
         assert tag.count(":") == 2
     else:
         tag = _get_dashboard_etag(client, dashboard_id)
-        assert tag.startswith("live:") and tag.count(":") == 1
+        assert tag.startswith("live:")
+        assert tag.count(":") == 1
 
     response = client.put(
         f"/api/v1/dashboard/{dashboard_id}",
@@ -554,9 +556,7 @@ def test_if_match_with_access_suffix_still_matches(
 
 def _unversioned(mocker: MockerFixture) -> None:
     """Capture on, but the entity has no version rows yet."""
-    mocker.patch(
-        "superset.versioning.api_helpers._capture_enabled", return_value=True
-    )
+    mocker.patch("superset.versioning.api_helpers._capture_enabled", return_value=True)
     mocker.patch(
         "superset.versioning.api_helpers.VersionDAO.current_live_version_uuid",
         return_value=None,
@@ -610,9 +610,7 @@ def test_small_write_on_unversioned_dashboard_reports_unversioned_token(
     )
 
     assert response.status_code == 200, response.get_data(as_text=True)
-    assert response.json["old_version_uuid"] == unversioned_entity_token(
-        dashboard.uuid
-    )
+    assert response.json["old_version_uuid"] == unversioned_entity_token(dashboard.uuid)
     assert response.json["new_version_uuid"] == "after"
     assert response.headers["ETag"] == '"after"'
 
@@ -643,6 +641,9 @@ def test_small_write_whose_after_read_fails_still_answers_200(
         SQLAlchemyError("connection lost"),
     ]
     mocker.patch("superset.dashboards.api.lock_entity_for_update")
+    from superset import db
+
+    rollback = mocker.patch.object(db.session, "rollback")
 
     response = client.put(
         f"/api/v1/dashboard/{dashboard.id}/colors",
@@ -653,6 +654,9 @@ def test_small_write_whose_after_read_fails_still_answers_200(
     assert response.json["old_version_uuid"] == "before"
     assert response.json["new_version_uuid"] is None
     assert "ETag" not in response.headers
+    # the failed read aborted the transaction; the request's later writes
+    # (the action log) need it rolled back (the write itself has committed)
+    rollback.assert_called_once()
 
 
 def test_dashboard_access_etag_is_per_user(mocker: MockerFixture) -> None:
