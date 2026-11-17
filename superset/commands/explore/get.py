@@ -41,6 +41,7 @@ from superset.extensions import security_manager
 from superset.models.sql_lab import Query
 from superset.superset_typing import ExplorableData
 from superset.utils import core as utils, json
+from superset.versioning.api_helpers import entity_concurrency_token
 from superset.views.utils import (
     get_datasource_info,
     get_form_data,
@@ -238,10 +239,21 @@ class GetExploreCommand(BaseCommand, ABC):
             if slc.changed_by:
                 metadata["changed_by"] = slc.changed_by.get_full_name()
 
+        slice_data = None
+        if slc:
+            # pylint: disable=import-outside-toplevel
+            from superset.models.slice import Slice
+
+            # The base token a later chart save replays as ``If-Match``.
+            slice_data = {
+                **slc.data,
+                "version_uuid": entity_concurrency_token(Slice, slc.id, slc.uuid),
+            }
+
         result: dict[str, Any] = {
             "dataset": sanitize_datasource_data(datasource_data),
             "form_data": form_data,
-            "slice": slc.data if slc else None,
+            "slice": slice_data,
             "message": message,
             "metadata": metadata,
         }

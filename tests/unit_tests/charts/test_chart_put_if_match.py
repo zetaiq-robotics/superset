@@ -140,3 +140,55 @@ def test_put_chart_without_if_match_still_saves(
     # new_info read passes none.
     assert version_info.call_args_list[0].kwargs["lock_for_stale_check"] is False
     assert _stored_name(chart_id) == "plain save"
+
+
+def test_chart_get_etag_for_unversioned_chart_is_unversioned_token(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A never-versioned chart still hands out a validator, with no suffix."""
+    from superset.versioning.api_helpers import unversioned_entity_token
+
+    chart, _ = _store_chart(mocker)
+    mocker.patch(
+        "superset.versioning.api_helpers._capture_enabled", return_value=True
+    )
+    mocker.patch(
+        "superset.versioning.api_helpers.VersionDAO.current_live_version_uuid",
+        return_value=None,
+    )
+
+    response = client.get(f"/api/v1/chart/{chart.id}")
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.headers["ETag"] == f'"{unversioned_entity_token(chart.uuid)}"'
+
+
+def test_put_chart_on_unversioned_chart_reports_unversioned_token(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """The replaced version of a never-versioned chart is the GET's token."""
+    from superset.versioning.api_helpers import (
+        EntityVersionInfo,
+        unversioned_entity_token,
+    )
+
+    chart, version_info = _store_chart(mocker)
+    version_info.side_effect = [
+        EntityVersionInfo(entity_uuid=chart.uuid),
+        EntityVersionInfo(
+            version=1, transaction_id=3, version_uuid="after", entity_uuid=chart.uuid
+        ),
+    ]
+
+    response = client.put(f"/api/v1/chart/{chart.id}", json={"slice_name": "x"})
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.json["old_version_uuid"] == unversioned_entity_token(chart.uuid)
+    assert response.json["new_version_uuid"] == "after"
+    assert response.headers["ETag"] == '"after"'

@@ -70,3 +70,46 @@ def test_temporary_cache_access_denied_omits_inert_access_flag(
         response = client.get("/api/v1/explore/?form_data_key=abc")
 
     assert "extra" not in response.json
+
+
+def test_explore_includes_chart_version_uuid(
+    session: Any, client: Any, full_api_access: None, mocker: Any
+) -> None:
+    """Explore hands out the saved chart's version token for ``If-Match``."""
+    from superset import db, security_manager
+    from superset.models.slice import Slice
+
+    mocker.patch.object(security_manager, "is_admin", return_value=True)
+    mocker.patch.object(security_manager, "raise_for_access")
+    Slice.metadata.create_all(db.session.get_bind())
+    chart = Slice(
+        slice_name="saved",
+        datasource_type="table",
+        datasource_id=1,
+        viz_type="table",
+        params="{}",
+    )
+    db.session.add(chart)
+    db.session.flush()
+    token = mocker.patch(
+        "superset.commands.explore.get.entity_concurrency_token",
+        return_value="live",
+    )
+
+    response = client.get(f"/api/v1/explore/?slice_id={chart.id}")
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.json["result"]["slice"]["version_uuid"] == "live"
+    assert token.call_args.args == (Slice, chart.id, chart.uuid)
+
+
+def test_explore_without_a_saved_chart_has_no_slice(
+    client: Any, full_api_access: None
+) -> None:
+    """An unsaved chart has no slice payload, so no version to report."""
+    response = client.get(
+        "/api/v1/explore/?datasource_id=50000&datasource_type=table",
+    )
+
+    assert response.status_code == 200
+    assert response.json["result"]["slice"] is None

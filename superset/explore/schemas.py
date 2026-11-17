@@ -185,6 +185,13 @@ class SliceSchema(Schema):
     slice_id = fields.Integer(metadata={"description": "The slice ID."})
     slice_name = fields.String(metadata={"description": "The slice name."})
     slice_url = fields.String(metadata={"description": "The slice URL."})
+    version_uuid = fields.String(
+        allow_none=True,
+        metadata={
+            "description": "The chart's live version token, to send as If-Match "
+            "on the next save. Null when version capture is off."
+        },
+    )
 
 
 class ExploreContextSchema(Schema):

@@ -133,8 +133,9 @@ from superset.utils.screenshots import (
 from superset.utils.urls import get_url_path
 from superset.versioning.api_helpers import (
     command_lost_lock_race,
-    current_entity_etag_uuid,
+    concurrency_token_from,
     current_entity_version_info,
+    entity_concurrency_token,
     EntityVersionInfo,
     get_version_endpoint,
     guard_conditional_write,
@@ -477,7 +478,7 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
 
             return set_version_etag(
                 self.response(200, result=result),
-                current_entity_etag_uuid(Slice, dash.id, dash.uuid),
+                entity_concurrency_token(Slice, dash.id, dash.uuid),
             )
         except ChartNotFoundError:
             return self.response_404()
@@ -894,6 +895,7 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
             new_info = current_entity_version_info(
                 Slice, changed_model.id, changed_model.uuid
             )
+            new_token = concurrency_token_from(new_info)
             response = self.response(
                 200,
                 id=changed_model.id,
@@ -902,10 +904,10 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
                 new_version=new_info.version,
                 old_transaction_id=old_info.transaction_id,
                 new_transaction_id=new_info.transaction_id,
-                old_version_uuid=old_info.version_uuid,
-                new_version_uuid=new_info.version_uuid,
+                old_version_uuid=concurrency_token_from(old_info),
+                new_version_uuid=new_token,
             )
-            set_version_etag(response, new_info.version_uuid)
+            set_version_etag(response, new_token)
         except ChartNotFoundError:
             response = self.response_404()
         except ChartForbiddenError:

@@ -16,6 +16,7 @@
 # under the License.
 # pylint: disable=too-many-lines
 import functools
+import hashlib
 import logging
 import time
 import uuid
@@ -185,8 +186,9 @@ from superset.utils.screenshots import (
 from superset.utils.urls import get_url_path
 from superset.versioning.api_helpers import (
     command_lost_lock_race,
-    current_entity_etag_uuid,
+    concurrency_token_from,
     current_entity_version_info,
+    entity_concurrency_token,
     EntityVersionInfo,
     get_version_endpoint,
     guard_conditional_write,
@@ -269,15 +271,36 @@ def _version_pair_response(
 ) -> Response:
     """200 for a single-field dashboard write: the version pair plus ``ETag``."""
     new_info = current_entity_version_info(Dashboard, pk, old_info.entity_uuid)
+    new_token = concurrency_token_from(new_info)
     return set_version_etag(
         api.response(
             200,
-            old_version_uuid=old_info.version_uuid,
-            new_version_uuid=new_info.version_uuid,
+            old_version_uuid=concurrency_token_from(old_info),
+            new_version_uuid=new_token,
             **kwargs,
         ),
-        new_info.version_uuid,
+        new_token,
     )
+
+
+def dashboard_access_etag(dash: Dashboard, version_uuid: str | None) -> str | None:
+    """The dashboard GET's tag: ``<version uuid>:<access hash>``.
+
+    Editors and viewers are not part of the versioned row, so a change to
+    them alone leaves the version uuid where it was. The hash makes the tag
+    move anyway, so a client comparing tags sees access changes too. Writes
+    compare only the part before the first ``:`` (see
+    :func:`~superset.versioning.etag.raise_for_stale_write`), so ``If-Match``
+    still checks the version alone.
+    """
+    if version_uuid is None:
+        return None
+
+    def ids(subjects: Any) -> str:
+        return ",".join(str(i) for i in sorted(s.id for s in subjects))
+
+    access = f"{ids(dash.editors)}|{ids(dash.viewers)}"
+    return f"{version_uuid}:{hashlib.sha256(access.encode()).hexdigest()[:16]}"
 
 
 def with_dashboard(
@@ -772,7 +795,9 @@ class DashboardRestApi(
         )
         return set_version_etag(
             self.response(200, result=result),
-            current_entity_etag_uuid(Dashboard, dash.id, dash.uuid),
+            dashboard_access_etag(
+                dash, entity_concurrency_token(Dashboard, dash.id, dash.uuid)
+            ),
         )
 
     @expose("/<id_or_slug>/datasets", methods=("GET",))
@@ -1170,6 +1195,7 @@ class DashboardRestApi(
             new_info = current_entity_version_info(
                 Dashboard, changed_model.id, changed_model.uuid
             )
+            new_token = concurrency_token_from(new_info)
             response = self.response(
                 200,
                 id=changed_model.id,
@@ -1179,10 +1205,10 @@ class DashboardRestApi(
                 new_version=new_info.version,
                 old_transaction_id=old_info.transaction_id,
                 new_transaction_id=new_info.transaction_id,
-                old_version_uuid=old_info.version_uuid,
-                new_version_uuid=new_info.version_uuid,
+                old_version_uuid=concurrency_token_from(old_info),
+                new_version_uuid=new_token,
             )
-            set_version_etag(response, new_info.version_uuid)
+            set_version_etag(response, new_token)
         except DashboardNotFoundError:
             response = self.response_404()
         except DashboardForbiddenError:
