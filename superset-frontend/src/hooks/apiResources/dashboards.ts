@@ -21,13 +21,19 @@ import rison from 'rison';
 import { Dashboard, Datasource, EmbeddedDashboard } from 'src/dashboard/types';
 import { Chart } from 'src/types/Chart';
 import { Currency } from '@superset-ui/core';
-import { useApiV1Resource, useTransformedResource } from './apiResources';
+import {
+  useApiV1Resource,
+  useApiV1ResourceWithEtag,
+  useTransformedResource,
+} from './apiResources';
 
 export const DASHBOARD_GET_COLUMNS = [
   'id',
   'slug',
   'url',
   'dashboard_title',
+  // the edit-mode Save sends description back; without it Save wipes it
+  'description',
   'published',
   'css',
   'theme',
@@ -52,9 +58,11 @@ export const DASHBOARD_GET_COLUMNS = [
 export const useDashboard = (idOrSlug: string | number) => {
   const q = rison.encode({ columns: DASHBOARD_GET_COLUMNS });
   return useTransformedResource(
-    useApiV1Resource<Dashboard>(`/api/v1/dashboard/${idOrSlug}?q=${q}`),
-    dashboard => ({
+    useApiV1ResourceWithEtag<Dashboard>(`/api/v1/dashboard/${idOrSlug}?q=${q}`),
+    ({ result: dashboard, etag }) => ({
       ...dashboard,
+      // the version this copy was loaded at (src/dashboard/live/versionTracker)
+      etag,
       // TODO: load these at the API level
       metadata:
         (dashboard.json_metadata && JSON.parse(dashboard.json_metadata)) || {},

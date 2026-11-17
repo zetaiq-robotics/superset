@@ -112,6 +112,8 @@ fetchMock.get('glob:*/api/v1/chart/318*', {
 fetchMock.put('glob:*/api/v1/chart/318', {
   body: {
     id: 318,
+    old_version_uuid: 'v1',
+    new_version_uuid: 'v2',
     result: {
       cache_timeout: null,
       certified_by: 'John Doe',
@@ -120,7 +122,6 @@ fetchMock.put('glob:*/api/v1/chart/318', {
       slice_name: 'Age distribution of respondents',
     },
   },
-  sendAsJson: true,
 });
 
 afterAll(() => {
@@ -261,6 +262,24 @@ test('"Save" button should call "onSave" and "onHide"', async () => {
     expect(props.onSave).toHaveBeenCalledTimes(1);
     expect(props.onHide).toHaveBeenCalledTimes(1);
   });
+});
+
+test('saving properties adopts the chart version the save created', async () => {
+  const props = createProps();
+  props.slice.version_uuid = 'v1';
+  renderModal(props);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled(),
+  );
+
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  // otherwise Explore's next overwrite would send If-Match "v1" and be refused
+  await waitFor(() =>
+    expect(props.onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ version_uuid: 'v2' }),
+    ),
+  );
 });
 
 test('"Name" should not be empty', async () => {

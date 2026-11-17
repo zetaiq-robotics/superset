@@ -18,7 +18,7 @@
  */
 import { Dispatch } from 'redux';
 import { t } from '@apache-superset/core/translation';
-import { makeApi, getClientErrorObject } from '@superset-ui/core';
+import { makeApi, getClientErrorObject, JsonObject } from '@superset-ui/core';
 import { addDangerToast } from 'src/components/MessageToasts/actions';
 import {
   ChartConfiguration,
@@ -27,16 +27,104 @@ import {
   GlobalChartCrossFilterConfig,
   RootState,
 } from 'src/dashboard/types';
+import {
+  ifMatch,
+  noteNewer,
+  NO_VERSIONS,
+  Versions,
+  versionOf,
+} from 'src/dashboard/live/versionTracker';
 import { onSave } from './dashboardState';
 
-const createUpdateDashboardApi = (id: number) =>
-  makeApi<
-    Partial<DashboardInfo>,
-    { result: Partial<DashboardInfo>; last_modified_time: number }
-  >({
+/** The version pair every dashboard write returns. */
+export type VersionPair = {
+  old_version_uuid?: string | null;
+  new_version_uuid?: string | null;
+};
+
+type UpdateDashboardResponse = {
+  result: Partial<DashboardInfo>;
+  last_modified_time: number;
+} & VersionPair;
+
+const putJsonMetadata = (
+  id: number,
+  metadata: JsonObject,
+  base: string | null | undefined,
+) =>
+  makeApi<Partial<DashboardInfo>, UpdateDashboardResponse>({
     method: 'PUT',
     endpoint: `/api/v1/dashboard/${id}`,
-  });
+    headers: ifMatch(base),
+  })({ json_metadata: JSON.stringify(metadata) });
+
+/**
+ * PUT the tab's `json_metadata` with one setting changed by `change`.
+ *
+ * The whole document is sent, so it carries `If-Match` like a full save. On
+ * a 412 (someone else saved since this tab loaded) it re-reads the dashboard,
+ * applies only `change` to the fresh metadata, and retries once against the
+ * fresh version; a second 412 is thrown to the caller's error handling.
+ */
+async function saveMetadataChange(
+  dispatch: Dispatch,
+  getState: () => RootState,
+  change: (metadata: JsonObject) => JsonObject,
+): Promise<UpdateDashboardResponse> {
+  const { id, metadata, versions } = getState().dashboardInfo;
+  let response: UpdateDashboardResponse;
+  try {
+    response = await putJsonMetadata(
+      id,
+      change(metadata as JsonObject),
+      versions?.base,
+    );
+  } catch (error) {
+    if ((error as { status?: number })?.status !== 412) throw error;
+    const fresh = await makeApi<{}, Response, 'raw'>({
+      method: 'GET',
+      endpoint: `/api/v1/dashboard/${id}`,
+      responseType: 'raw',
+      cache: 'no-store',
+    })({});
+    const etag = fresh.headers.get('ETag');
+    const { result } = await fresh.json();
+    if (etag) {
+      const current = getState().dashboardInfo.versions ?? NO_VERSIONS;
+      dispatch(setDashboardVersions(noteNewer(current, etag)));
+    }
+    response = await putJsonMetadata(
+      id,
+      change(JSON.parse(result.json_metadata || '{}')),
+      versionOf(etag),
+    );
+  }
+  dispatch(adoptOwnWrite(id, response));
+  return response;
+}
+
+export const SET_DASHBOARD_VERSIONS = 'SET_DASHBOARD_VERSIONS';
+
+export function setDashboardVersions(versions: Versions) {
+  return { type: SET_DASHBOARD_VERSIONS, versions };
+}
+
+export const DASHBOARD_OWN_WRITE = 'DASHBOARD_OWN_WRITE';
+
+/**
+ * Dispatch with the response body of every write this tab makes to
+ * dashboard `id`; the reducer applies `adoptAfterOwnWrite`. Ignored when the
+ * tab has since moved to another dashboard.
+ */
+export function adoptOwnWrite(id: number, body: unknown) {
+  const pair = (body ?? {}) as VersionPair;
+  return {
+    type: DASHBOARD_OWN_WRITE,
+    dashboardId: id,
+    replaced: pair.old_version_uuid ?? null,
+    created: pair.new_version_uuid ?? null,
+  };
+}
 
 export const DASHBOARD_SAVE_SUCCEEDED = 'DASHBOARD_SAVE_SUCCEEDED';
 
@@ -74,20 +162,20 @@ export const saveChartConfiguration =
       chartConfiguration,
       globalChartConfiguration,
     });
-    const { id, metadata } = getState().dashboardInfo;
-
-    const updateDashboard = createUpdateDashboardApi(id);
+    const { id } = getState().dashboardInfo;
 
     try {
-      const response = await updateDashboard({
-        json_metadata: JSON.stringify({
+      const response = await saveMetadataChange(
+        dispatch,
+        getState,
+        metadata => ({
           ...metadata,
           chart_configuration:
             chartConfiguration ?? metadata.chart_configuration,
           global_chart_configuration:
             globalChartConfiguration ?? metadata.global_chart_configuration,
         }),
-      });
+      );
       dispatch(
         dashboardInfoChanged({
           metadata: JSON.parse(response.result.json_metadata || '{}'),
@@ -125,15 +213,12 @@ export function setCrossFiltersEnabled(crossFiltersEnabled: boolean) {
 
 export function saveFilterBarOrientation(orientation: FilterBarOrientation) {
   return async (dispatch: Dispatch, getState: () => RootState) => {
-    const { id, metadata } = getState().dashboardInfo;
-    const updateDashboard = createUpdateDashboardApi(id);
     try {
-      const response = await updateDashboard({
-        json_metadata: JSON.stringify({
-          ...metadata,
-          filter_bar_orientation: orientation,
-        }),
-      });
+      const response = await saveMetadataChange(
+        dispatch,
+        getState,
+        metadata => ({ ...metadata, filter_bar_orientation: orientation }),
+      );
       const updatedDashboard = response.result;
       const lastModifiedTime = response.last_modified_time;
       if (updatedDashboard.json_metadata) {
@@ -165,21 +250,17 @@ export function saveCrossFiltersSetting(crossFiltersEnabled: boolean) {
     dispatch: Dispatch,
     getState: () => RootState,
   ) {
-    const { id, metadata } = getState().dashboardInfo;
-
     const previousCrossFiltersEnabled =
       getState().dashboardInfo.crossFiltersEnabled;
 
     dispatch(setCrossFiltersEnabled(crossFiltersEnabled));
-    const updateDashboard = createUpdateDashboardApi(id);
 
     try {
-      const response = await updateDashboard({
-        json_metadata: JSON.stringify({
-          ...metadata,
-          cross_filters_enabled: crossFiltersEnabled,
-        }),
-      });
+      const response = await saveMetadataChange(
+        dispatch,
+        getState,
+        metadata => ({ ...metadata, cross_filters_enabled: crossFiltersEnabled }),
+      );
 
       const updatedDashboard = response.result;
       const lastModifiedTime = response.last_modified_time;

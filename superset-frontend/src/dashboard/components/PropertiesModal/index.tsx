@@ -62,6 +62,7 @@ import {
   dashboardSaveSucceeded,
 } from 'src/dashboard/actions/dashboardInfo';
 import { areObjectsEqual } from 'src/reduxUtils';
+import { ifMatch, versionOf } from 'src/dashboard/live/versionTracker';
 import { AsyncModeOverride } from 'src/utils/asyncMode';
 import { StandardModal, useModalValidation } from 'src/components/Modal';
 import { validateRefreshFrequency } from '../RefreshFrequency';
@@ -167,6 +168,8 @@ const PropertiesModal = ({
   const categoricalSchemeRegistry = getCategoricalSchemeRegistry();
   const originalDashboardMetadata = useRef<Record<string, any>>({});
   const originalCss = useRef<string | null>(null);
+  // ETag of the copy this modal loaded; its save is checked against it
+  const loadedEtag = useRef<string | null>(null);
   const cssDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleErrorResponse = async (response: Response) => {
@@ -258,6 +261,7 @@ const PropertiesModal = ({
     SupersetClient.get({
       endpoint: `/api/v1/dashboard/${dashboardId}`,
     }).then(response => {
+      loadedEtag.current = response.response?.headers?.get('ETag') ?? null;
       const dashboard = response.json.result;
       const jsonMetadataObj = dashboard.json_metadata?.length
         ? JSON.parse(dashboard.json_metadata)
@@ -476,9 +480,13 @@ const PropertiesModal = ({
         ...morePutProps,
       };
 
+      // a stale copy answers 412, which handleErrorResponse reports
       SupersetClient.put({
         endpoint: `/api/v1/dashboard/${dashboardId}`,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...ifMatch(versionOf(loadedEtag.current)),
+        },
         body: JSON.stringify(saveData),
       }).then(() => {
         dispatch(dashboardSaveSucceeded(dashboardId));

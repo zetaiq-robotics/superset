@@ -31,6 +31,7 @@ import { cloneDeep, omit } from 'lodash-es';
 import { setDataMaskForFilterChangesComplete } from 'src/dataMask/actions';
 import { HYDRATE_DASHBOARD } from './hydrate';
 import {
+  adoptOwnWrite,
   dashboardInfoChanged,
   nativeFiltersConfigChanged,
 } from './dashboardInfo';
@@ -90,6 +91,8 @@ export const setFilterConfiguration =
     });
     try {
       const response = await updateFilters(filterChanges);
+      // a single-field write: no If-Match, but it moves the version
+      dispatch(adoptOwnWrite(id, response));
       // chartsInScope/tabsInScope are derived from the live layout, and the
       // response carries the persisted copy for every filter - including the
       // ones this save never touched, whose copy is whatever was stored when

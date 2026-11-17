@@ -90,6 +90,8 @@ export type Slice = {
   viewers?: number[];
   datasource?: string;
   datasource_id?: number;
+  // from /api/v1/explore/: the version this copy was loaded at (If-Match)
+  version_uuid?: string | null;
 };
 
 export default Chart;

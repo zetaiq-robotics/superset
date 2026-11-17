@@ -18,7 +18,11 @@
  */
 import { renderHook, waitFor } from '@testing-library/react';
 import fetchMock from 'fetch-mock';
-import { useDashboard, useDashboardDatasets } from './dashboards';
+import {
+  DASHBOARD_GET_COLUMNS,
+  useDashboard,
+  useDashboardDatasets,
+} from './dashboards';
 
 test('useDashboard excludes thumbnail_url from request', async () => {
   fetchMock.get('glob:*/api/v1/dashboard/5?q=*', {
@@ -111,4 +115,31 @@ describe('useDashboardDatasets', () => {
       expect(result.current.result).toEqual(expectedContent);
     });
   });
+});
+
+test('DASHBOARD_GET_COLUMNS includes description', () => {
+  // without it the edit-mode Save sends description: null and wipes it
+  expect(DASHBOARD_GET_COLUMNS).toContain('description');
+});
+
+test('useDashboard exposes the response ETag', async () => {
+  fetchMock.get('glob:*/api/v1/dashboard/7?q=*', {
+    body: {
+      result: {
+        id: 7,
+        dashboard_title: 'Test',
+        json_metadata: '{}',
+        position_json: '{}',
+      },
+    },
+    headers: { ETag: '"v1:abc:zstd"' },
+  });
+
+  const { result } = renderHook(() => useDashboard(7));
+
+  await waitFor(() =>
+    expect(result.current.result?.etag).toBe('"v1:abc:zstd"'),
+  );
+  expect(result.current.result?.dashboard_title).toBe('Test');
+  fetchMock.clearHistory().removeRoutes();
 });

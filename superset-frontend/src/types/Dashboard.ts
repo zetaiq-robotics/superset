@@ -40,6 +40,8 @@ export interface Dashboard {
   extra_editors?: number[];
   viewers?: Subject[];
   is_managed_externally: boolean;
+  // the GET response's ETag header (useDashboard), not a schema field
+  etag?: string | null;
   theme?: {
     id: number;
     theme_name: string;

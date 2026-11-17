@@ -37,7 +37,17 @@ import {
   fetchFaveStar,
   saveFaveStar,
   savePublished,
+  persistDashboardLabelsColor,
 } from 'src/dashboard/actions/dashboardState';
+import {
+  saveChartConfiguration,
+  saveCrossFiltersSetting,
+  saveFilterBarOrientation,
+} from 'src/dashboard/actions/dashboardInfo';
+import { setFilterConfiguration } from 'src/dashboard/actions/nativeFilters';
+import { saveChartCustomization } from 'src/dashboard/actions/chartCustomizationActions';
+import dashboardInfoReducer from 'src/dashboard/reducers/dashboardInfo';
+import { FilterBarOrientation } from 'src/dashboard/types';
 import { refreshChart } from 'src/components/Chart/chartAction';
 import { UPDATE_COMPONENTS_PARENTS_LIST } from 'src/dashboard/actions/dashboardLayout';
 import { ADD_TOAST } from 'src/components/MessageToasts/actions';
@@ -1003,7 +1013,8 @@ describe('dashboardState actions', () => {
 
       await savePublished(id, true)(dispatch, getState);
 
-      expect(dispatch).toHaveBeenCalledTimes(2);
+      // toast, toggle, and adopting the version the write created
+      expect(dispatch).toHaveBeenCalledTimes(3);
       expect(dispatch.mock.calls[0][0]).toEqual(
         expect.objectContaining({
           type: ADD_TOAST,
@@ -1144,4 +1155,172 @@ describe('dashboardState actions', () => {
       );
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// Base version and If-Match (live dashboards)
+// ---------------------------------------------------------------------------
+
+// Real thunks against the real dashboardInfo reducer, so a write's version
+// pair goes through the same path the app takes before the next full save.
+function liveStore(versions: { base: string | null; latest: string | null }) {
+  let state: Record<string, any> = {
+    dashboardState: {
+      sliceIds: [filterId],
+      hasUnsavedChanges: true,
+      labelsColorMapMustSync: true,
+    },
+    dashboardInfo: {
+      id: 1,
+      metadata: { color_scheme: 'supersetColors' },
+      versions,
+    },
+    sliceEntities,
+    dashboardFilters: emptyFilters,
+    dashboardLayout: {
+      past: [],
+      present: mockDashboardData.positions,
+      future: {},
+    },
+    charts: {},
+    nativeFilters: { filters: {} },
+  };
+  const getState = () => state as any;
+  const dispatch: any = (action: any) => {
+    if (typeof action === 'function') return action(dispatch, getState);
+    state = {
+      ...state,
+      dashboardInfo: dashboardInfoReducer(state.dashboardInfo, action),
+    };
+    return action;
+  };
+  return { dispatch, getState };
+}
+
+// `request` carries the makeApi writes (filters, customizations,
+// cross-filter settings); `put` the direct ones (save, published, colours).
+function stubWrites(replaced: string, created: string, result: unknown = []) {
+  const pair = { old_version_uuid: replaced, new_version_uuid: created };
+  const request = jest.spyOn(SupersetClient, 'request').mockResolvedValue({
+    json: async () => ({ result, ...pair }),
+  } as any);
+  const put = jest.spyOn(SupersetClient, 'put').mockResolvedValue({
+    json: { result: mockDashboardData, ...pair },
+  } as any);
+  const get = jest
+    .spyOn(SupersetClient, 'get')
+    .mockResolvedValue({ json: { result: [] } } as any);
+  return {
+    put,
+    restore: () => [request, put, get].forEach(s => s.mockRestore()),
+  };
+}
+
+const fullSave = (dispatch: any, getState: any) =>
+  saveDashboardRequest(mockDashboardData, 1, SAVE_TYPE_OVERWRITE)(
+    dispatch,
+    getState,
+  );
+
+const lastPutHeaders = (put: jest.SpyInstance) =>
+  put.mock.calls[put.mock.calls.length - 1][0].headers;
+
+test('sends If-Match with the base version', async () => {
+  const stubs = stubWrites('a', 'b');
+  const { dispatch, getState } = liveStore({ base: 'a', latest: 'a' });
+
+  await fullSave(dispatch, getState);
+
+  expect(lastPutHeaders(stubs.put)['If-Match']).toBe('"a"');
+  stubs.restore();
+});
+
+test('sends no If-Match when the dashboard has no version', async () => {
+  const stubs = stubWrites('a', 'b');
+  const { dispatch, getState } = liveStore({ base: null, latest: null });
+
+  await fullSave(dispatch, getState);
+
+  expect(lastPutHeaders(stubs.put)).not.toHaveProperty('If-Match');
+  stubs.restore();
+});
+
+test('a small write from a tab that is behind keeps the conflict', async () => {
+  // Someone else saved 'c' after this tab loaded 'a'; the tab kept editing.
+  const stubs = stubWrites('c', 'd');
+  const { dispatch, getState } = liveStore({ base: 'a', latest: 'c' });
+
+  await dispatch(
+    setFilterConfiguration({ modified: [], deleted: ['F-1'], reordered: [] }),
+  );
+  expect(getState().dashboardInfo.versions).toEqual({
+    base: 'a',
+    latest: 'd',
+  });
+
+  await fullSave(dispatch, getState);
+
+  expect(lastPutHeaders(stubs.put)['If-Match']).toBe('"a"');
+  stubs.restore();
+});
+
+const metadataResult = { json_metadata: '{}' };
+test.each([
+  [
+    'filters',
+    [],
+    (d: any) =>
+      d(setFilterConfiguration({ modified: [], deleted: ['F-1'], reordered: [] })),
+  ],
+  [
+    'chart customizations',
+    [],
+    (d: any) => d(saveChartCustomization([], ['C-1'])),
+  ],
+  ['colours', [], (d: any) => d(persistDashboardLabelsColor())],
+  ['published toggle', [], (d: any) => d(savePublished(1, true))],
+  [
+    'cross-filter scoping',
+    metadataResult,
+    (d: any) => d(saveChartConfiguration({ chartConfiguration: {} })),
+  ],
+  [
+    'filter bar orientation',
+    metadataResult,
+    (d: any) => d(saveFilterBarOrientation(FilterBarOrientation.Horizontal)),
+  ],
+  [
+    'cross-filters setting',
+    metadataResult,
+    (d: any) => d(saveCrossFiltersSetting(false)),
+  ],
+  ['full save', [], (d: any, g: any) => fullSave(d, g)],
+])(
+  'own %s write from an up-to-date tab moves the base, so the next save is not refused',
+  async (_name, result, write) => {
+    const stubs = stubWrites('a', 'b', result);
+    const { dispatch, getState } = liveStore({ base: 'a', latest: 'a' });
+
+    await write(dispatch, getState);
+    await waitFor(() =>
+      expect(getState().dashboardInfo.versions).toEqual({
+        base: 'b',
+        latest: 'b',
+      }),
+    );
+
+    await fullSave(dispatch, getState);
+    expect(lastPutHeaders(stubs.put)['If-Match']).toBe('"b"');
+    stubs.restore();
+  },
+);
+
+test('a write that lands after navigating to another dashboard is ignored', async () => {
+  const stubs = stubWrites('x', 'y');
+  const { dispatch, getState } = liveStore({ base: 'a', latest: 'a' });
+
+  await dispatch(savePublished(999, true));
+
+  expect(getState().dashboardInfo.versions).toEqual({ base: 'a', latest: 'a' });
+  stubs.restore();
 });

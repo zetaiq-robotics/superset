@@ -87,6 +87,46 @@ const initialState: LoadingState = {
 export function useApiResourceFullBody<RESULT>(
   endpoint: string,
 ): Resource<RESULT> {
+  return useFetchedResource(endpoint, fetchJsonBody as Fetcher<RESULT>);
+}
+
+type Fetcher<RESULT> = (endpoint: string) => Promise<RESULT>;
+
+const fetchJsonBody: Fetcher<unknown> = endpoint =>
+  makeApi<{}, unknown>({ method: 'GET', endpoint })({});
+
+const fetchV1ResultWithEtag: Fetcher<{
+  result: unknown;
+  etag: string | null;
+}> = async endpoint => {
+  const response = await makeApi<{}, Response, 'raw'>({
+    method: 'GET',
+    endpoint,
+    responseType: 'raw',
+  })({});
+  const { result } = await response.json();
+  return { result, etag: response.headers.get('ETag') };
+};
+
+/**
+ * Like {useApiV1Resource}, plus the response's ETag header (null when the
+ * server sent none).
+ */
+export function useApiV1ResourceWithEtag<RESULT>(
+  endpoint: string,
+): Resource<{ result: RESULT; etag: string | null }> {
+  return useFetchedResource(
+    endpoint,
+    fetchV1ResultWithEtag as Fetcher<{ result: RESULT; etag: string | null }>,
+  );
+}
+
+// `fetcher` must be a stable (module-level) function: only `endpoint`
+// changes trigger a new request.
+function useFetchedResource<RESULT>(
+  endpoint: string,
+  fetcher: Fetcher<RESULT>,
+): Resource<RESULT> {
   const [resource, setResource] = useState<Resource<RESULT>>(initialState);
   const cancelRef = useRef<() => void>(() => {});
 
@@ -103,12 +143,7 @@ export function useApiResourceFullBody<RESULT>(
       cancelled = true;
     };
 
-    const fetchResource = makeApi<{}, RESULT>({
-      method: 'GET',
-      endpoint,
-    });
-
-    fetchResource({})
+    fetcher(endpoint)
       .then(result => {
         if (!cancelled) {
           setResource({
@@ -132,7 +167,7 @@ export function useApiResourceFullBody<RESULT>(
     return () => {
       cancelled = true;
     };
-  }, [endpoint]);
+  }, [endpoint, fetcher]);
 
   return resource;
 }

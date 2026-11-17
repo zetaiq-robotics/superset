@@ -69,6 +69,7 @@ const hydrate = (
     activeTabs?: string[] | null;
     dashboardState?: Record<string, unknown>;
     charts?: unknown[];
+    etag?: string;
   } = {},
 ) => {
   const dispatch = jest.fn((action: unknown) => action);
@@ -81,7 +82,7 @@ const hydrate = (
   const action = (
     hydrateDashboard({
       history: { replace: jest.fn() },
-      dashboard: buildDashboard(positionData),
+      dashboard: { ...buildDashboard(positionData), etag: overrides.etag },
       charts: overrides.charts ?? [],
       dataMask: {},
       activeTabs: overrides.activeTabs ?? null,
@@ -416,5 +417,23 @@ test('an inaccessible chart keeps only its slice_id as form_data, leaving others
   expect(action.data.charts[7].form_data).toMatchObject({
     slice_id: 7,
     viz_type: 'table',
+  });
+});
+
+test('seeds the base version from the GET ETag', () => {
+  const action = hydrate(flatTabsPositionData, { etag: '"v1:abc:zstd"' });
+
+  expect(action.data.dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v1',
+  });
+});
+
+test('a dashboard served without an ETag has no base version', () => {
+  const action = hydrate(flatTabsPositionData);
+
+  expect(action.data.dashboardInfo.versions).toEqual({
+    base: null,
+    latest: null,
   });
 });
