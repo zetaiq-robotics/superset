@@ -193,8 +193,10 @@ from superset.versioning.api_helpers import (
     list_versions_endpoint,
     lock_contention_response,
     lock_entity_for_update,
+    read_version_for_write,
     restore_version_endpoint,
 )
+from superset.versioning.db_errors import is_lock_contention_error
 from superset.versioning.etag import (
     raise_for_stale_write,
     set_version_etag,
@@ -236,6 +238,46 @@ _DASHBOARD_PURGE_BINDING = SoftDeleteBinding(
     forbidden=DashboardForbiddenError,
     delete_failed=DashboardDeleteFailedError,
 )
+
+
+def _locked_version_read(api: Any, pk: Any) -> Response | EntityVersionInfo:
+    """Lock the dashboard and read the version a single-field write replaces.
+
+    Filter, chart-customization and colour saves create a version but take no
+    ``If-Match``: they only report ``old_version_uuid`` / ``new_version_uuid``
+    (same meaning as the main PUT's) and the new version as ``ETag``, so a
+    client can tell whether the replaced version was the one it started from.
+    The row lock, held through the command, keeps another save from landing
+    between this read and the write, which would make ``old_version_uuid``
+    name a version older than the one actually replaced. Returns the 409
+    response on a lost lock race; keep the returned info alive until the
+    command has run (it holds the locked entity).
+    """
+    return read_version_for_write(
+        api,
+        Dashboard,
+        pk,
+        noun="dashboard",
+        locked=True,
+        lock=lock_entity_for_update,
+        read_version=current_entity_version_info,
+    )
+
+
+def _version_pair_response(
+    api: Any, pk: Any, old_info: EntityVersionInfo, **kwargs: Any
+) -> Response:
+    """200 for a single-field dashboard write: the version pair plus ``ETag``."""
+    new_info = current_entity_version_info(Dashboard, pk, old_info.entity_uuid)
+    return set_version_etag(
+        api.response(
+            200,
+            old_version_uuid=old_info.version_uuid,
+            new_version_uuid=new_info.version_uuid,
+            **kwargs,
+        ),
+        new_info.version_uuid,
+    )
 
 
 def with_dashboard(
@@ -1193,7 +1235,9 @@ class DashboardRestApi(
                   $ref: '#/components/schemas/DashboardNativeFiltersConfigUpdateSchema'
           responses:
             200:
-              description: Dashboard native filters updated
+              description: >-
+                Dashboard native filters updated. ``If-Match`` is not
+                checked; the ``ETag`` header carries new_version_uuid.
               content:
                 application/json:
                   schema:
@@ -1201,6 +1245,16 @@ class DashboardRestApi(
                     properties:
                       result:
                         type: array
+                      old_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid before this write.
+                      new_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid after this write.
             400:
               $ref: '#/components/responses/400'
             401:
@@ -1219,11 +1273,14 @@ class DashboardRestApi(
         except ValidationError as error:
             return self.response_400(message=error.messages)
 
+        # Held until the command has run: it carries the locked entity.
+        old_info = _locked_version_read(self, pk)
+        if not isinstance(old_info, EntityVersionInfo):
+            return old_info
         try:
             configuration = UpdateDashboardNativeFiltersCommand(pk, item).run()
-            response = self.response(
-                200,
-                result=configuration,
+            response = _version_pair_response(
+                self, pk, old_info, result=configuration
             )
         except DashboardNotFoundError:
             response = self.response_404()
@@ -1234,6 +1291,8 @@ class DashboardRestApi(
         except DashboardInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except DashboardNativeFiltersUpdateFailedError as ex:
+            if is_lock_contention_error(ex.__cause__):
+                return lock_contention_response(self, "dashboard")
             logger.error(
                 "Error changing native filters for dashboard %s: %s",
                 self.__class__.__name__,
@@ -1275,7 +1334,9 @@ class DashboardRestApi(
                     #/components/schemas/DashboardChartCustomizationsConfigUpdateSchema
           responses:
             200:
-              description: Dashboard chart customizations updated
+              description: >-
+                Dashboard chart customizations updated. ``If-Match`` is not
+                checked; the ``ETag`` header carries new_version_uuid.
               content:
                 application/json:
                   schema:
@@ -1283,6 +1344,16 @@ class DashboardRestApi(
                     properties:
                       result:
                         type: array
+                      old_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid before this write.
+                      new_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid after this write.
             400:
               $ref: '#/components/responses/400'
             401:
@@ -1303,11 +1374,14 @@ class DashboardRestApi(
         except ValidationError as error:
             return self.response_400(message=error.messages)
 
+        # Held until the command has run: it carries the locked entity.
+        old_info = _locked_version_read(self, pk)
+        if not isinstance(old_info, EntityVersionInfo):
+            return old_info
         try:
             configuration = UpdateDashboardChartCustomizationsCommand(pk, item).run()
-            response = self.response(
-                200,
-                result=configuration,
+            response = _version_pair_response(
+                self, pk, old_info, result=configuration
             )
         except DashboardNotFoundError:
             response = self.response_404()
@@ -1318,6 +1392,8 @@ class DashboardRestApi(
         except DashboardInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except DashboardChartCustomizationsUpdateFailedError as ex:
+            if is_lock_contention_error(ex.__cause__):
+                return lock_contention_response(self, "dashboard")
             logger.error(
                 "Error changing chart customizations for dashboard %s: %s",
                 self.__class__.__name__,
@@ -1361,14 +1437,24 @@ class DashboardRestApi(
                   $ref: '#/components/schemas/DashboardColorsConfigUpdateSchema'
           responses:
             200:
-              description: Dashboard colors updated
+              description: >-
+                Dashboard colors updated. ``If-Match`` is not checked; the
+                ``ETag`` header carries new_version_uuid.
               content:
                 application/json:
                   schema:
                     type: object
                     properties:
-                      result:
-                        type: array
+                      old_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid before this write.
+                      new_version_uuid:
+                        type: string
+                        format: uuid
+                        nullable: true
+                        description: Live version_uuid after this write.
             400:
               $ref: '#/components/responses/400'
             401:
@@ -1387,12 +1473,16 @@ class DashboardRestApi(
         except ValidationError as error:
             return self.response_400(message=error.messages)
 
+        # Held until the command has run: it carries the locked entity.
+        old_info = _locked_version_read(self, pk)
+        if not isinstance(old_info, EntityVersionInfo):
+            return old_info
         try:
             mark_updated = parse_boolean_string(
                 request.args.get("mark_updated", "true")
             )
             UpdateDashboardColorsConfigCommand(pk, item, mark_updated).run()
-            response = self.response(200)
+            response = _version_pair_response(self, pk, old_info)
         except DashboardNotFoundError:
             response = self.response_404()
         except DashboardForbiddenError:
@@ -1400,6 +1490,8 @@ class DashboardRestApi(
         except DashboardInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except DashboardColorsConfigUpdateFailedError as ex:
+            if is_lock_contention_error(ex.__cause__):
+                return lock_contention_response(self, "dashboard")
             logger.error(
                 "Error changing color configuration for dashboard %s: %s",
                 self.__class__.__name__,
