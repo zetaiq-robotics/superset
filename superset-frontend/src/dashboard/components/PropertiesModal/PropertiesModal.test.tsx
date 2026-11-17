@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: tests for the removed Certification section.
+ * Modified by ZetaIQ: tests for the stale-save guard on the properties save.
  */
 import {
   fireEvent,

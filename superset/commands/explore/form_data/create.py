@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: cached form data records the chart version it started from.
 import logging
 
 from flask import current_app as app, session

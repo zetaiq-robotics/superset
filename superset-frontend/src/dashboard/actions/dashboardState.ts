@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a full save sends If-Match; a 412 opens the stale-save modal.
  */
 /* eslint camelcase: 0 */
 import { ActionCreators as UndoActionCreators } from 'redux-undo';

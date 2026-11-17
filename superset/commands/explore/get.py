@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: the slice carries the chart version to send as If-Match.
 import contextlib
 import logging
 from abc import ABC

@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a confirmed overwrite first reads the version saved now.
  */
 import thunk from 'redux-thunk';
 import configureStore from 'redux-mock-store';

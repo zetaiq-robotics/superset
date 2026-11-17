@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the dashboard ETag, description column and error body.
  */
 import { renderHook, waitFor } from '@testing-library/react';
 import fetchMock from 'fetch-mock';

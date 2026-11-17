@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: tests for the guarded chart save and the changes-since read.
  */
 import fetchMock from 'fetch-mock';
 import { StaleSaveError } from 'src/dashboard/live/changeSummary';

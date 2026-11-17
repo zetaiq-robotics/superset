@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: tests that the entity lock is one single-table SELECT on Postgres.
 """sc-120014: the conditional-write row lock must also refresh the entity.
 
 Dialect-independent statement-shape guards for ``lock_entity_for_update``:

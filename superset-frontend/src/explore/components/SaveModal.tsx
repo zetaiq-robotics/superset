@@ -18,6 +18,8 @@
  *
  * Modified by ZetaIQ: a chart opened from a dashboard is saved to that dashboard only;
  * an `explore.save.folder` extension renders in the dialog and files the saved chart.
+ * Modified by ZetaIQ: an overwrite sends If-Match and a 412 offers a copy or Overwrite;
+ * adding to a dashboard retries once on a 412.
  */
 /* eslint camelcase: 0 */
 import {

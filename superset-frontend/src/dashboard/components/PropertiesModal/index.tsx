@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: no Certification section; a typed new tag is created and swapped for its id.
+ * Modified by ZetaIQ: a save sends the loaded version as If-Match; a 412 offers Overwrite.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { omit } from 'lodash-es';

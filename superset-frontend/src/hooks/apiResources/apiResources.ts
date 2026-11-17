@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a hook that also returns the ETag; a 200 carrying an error is a failure.
  */
 
 import { makeApi, SupersetApiError } from '@superset-ui/core';

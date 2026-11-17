@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: holds a full save refused as stale.
  */
 /* eslint-disable camelcase */
 import { JsonObject } from '@superset-ui/core';

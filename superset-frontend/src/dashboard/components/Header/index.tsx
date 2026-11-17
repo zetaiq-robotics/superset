@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a `dashboard.nav.left` extension renders before the title.
+ * Modified by ZetaIQ: renders the stale-save modal.
  */
 /* eslint-env browser */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

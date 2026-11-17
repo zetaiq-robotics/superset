@@ -14,6 +14,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: dashboard PUT refuses a stale If-Match (412); single-field writes
+# return the version pair; the GET ETag covers access.
 # pylint: disable=too-many-lines
 import functools
 import hashlib

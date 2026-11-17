@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: no certification fields; saving sends the existing certification back unchanged.
+ * Modified by ZetaIQ: a save sends the version read on open as If-Match; a 412 offers Overwrite.
  */
 import {
   type ReactNode,

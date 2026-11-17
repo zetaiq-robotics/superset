@@ -18,6 +18,7 @@
  *
  * Modified by ZetaIQ: tests for saving a chart opened from a dashboard to that dashboard only,
  * and for the `explore.save.folder` extension.
+ * Modified by ZetaIQ: tests for the stale-save choices and the guarded add-to-dashboard.
  */
 import configureStore from 'redux-mock-store';
 import thunk from 'redux-thunk';
