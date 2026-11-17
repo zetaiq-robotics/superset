@@ -97,18 +97,16 @@ function PropertiesModal({
 }: PropertiesModalProps) {
   const dispatch = useAppDispatch();
   const [submitting, setSubmitting] = useState(false);
-  // values of form inputs
+  // values of form inputs: filled from the modal's own read on open (the
+  // same read that supplies the version a save is checked against); the
+  // caller's `slice` may be an older copy
   const [name, setName] = useState(slice.slice_name || '');
   const [description, setDescription] = useState(slice.description || '');
   const [cacheTimeout, setCacheTimeout] = useState(
     slice.cache_timeout != null ? String(slice.cache_timeout) : '',
   );
-  const [certifiedBy] = useState(slice.certified_by || '');
-  const [certificationDetails] = useState(
-    slice.certified_by && slice.certification_details
-      ? slice.certification_details
-      : '',
-  );
+  const [certifiedBy, setCertifiedBy] = useState('');
+  const [certificationDetails, setCertificationDetails] = useState('');
   const [selectedEditors, setSelectedEditors] = useState<
     SubjectPickerValue[] | null
   >(null);
@@ -118,6 +116,9 @@ function PropertiesModal({
   const [tags, setTags] = useState<TagType[]>([]);
   // ETag of the chart as this modal loaded it; its save is checked against it
   const loadedEtag = useRef<string | null>(null);
+  // the read on open has landed with a version: until then nothing is
+  // editable or saveable (a save would go unguarded or carry older fields)
+  const [loaded, setLoaded] = useState(false);
   // a save refused because someone else saved first; `overwrite` resends it
   const [stale, setStale] = useState<{
     summary: StaleSummary;
@@ -231,6 +232,17 @@ function PropertiesModal({
         });
         loadedEtag.current = response.response?.headers?.get('ETag') ?? null;
         const chart = response.json.result;
+        setName(chart.slice_name || '');
+        setDescription(chart.description || '');
+        setCacheTimeout(
+          chart.cache_timeout != null ? String(chart.cache_timeout) : '',
+        );
+        setCertifiedBy(chart.certified_by || '');
+        setCertificationDetails(
+          chart.certified_by && chart.certification_details
+            ? chart.certification_details
+            : '',
+        );
         if (isFeatureEnabled(FeatureFlag.TaggingSystem)) {
           const customTags = chart.tags?.filter(
             (tag: TagType) => tag.type === TagTypeEnum.Custom,
@@ -240,6 +252,11 @@ function PropertiesModal({
         setSelectedEditors(mapSubjectsToPickerValues(chart?.editors ?? []));
         if (isFeatureEnabled(FeatureFlag.EnableViewers)) {
           setSelectedViewers(mapSubjectsToPickerValues(chart?.viewers ?? []));
+        }
+        if (loadedEtag.current) {
+          setLoaded(true);
+        } else {
+          showError({ error: t('Could not read the version of this chart') });
         }
       } catch (response) {
         const clientError = await getClientErrorObject(response);
@@ -367,6 +384,7 @@ function PropertiesModal({
       title={t('Chart properties')}
       isEditMode
       saveDisabled={
+        !loaded ||
         submitting ||
         !name ||
         slice.is_managed_externally ||
@@ -416,6 +434,7 @@ function PropertiesModal({
                     data-test="properties-modal-name-input"
                     type="text"
                     value={name}
+                    disabled={!loaded}
                     onChange={(event: ChangeEvent<HTMLInputElement>) =>
                       setName(event.target.value ?? '')
                     }
@@ -430,6 +449,7 @@ function PropertiesModal({
                   <Input.TextArea
                     rows={3}
                     value={description}
+                    disabled={!loaded}
                     onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
                       setDescription(event.target.value ?? '')
                     }
@@ -519,6 +539,7 @@ function PropertiesModal({
                 <Input
                   aria-label={t('Cache timeout')}
                   value={cacheTimeout}
+                  disabled={!loaded}
                   onChange={(event: ChangeEvent<HTMLInputElement>) =>
                     setCacheTimeout(event.target.value ?? '')
                   }

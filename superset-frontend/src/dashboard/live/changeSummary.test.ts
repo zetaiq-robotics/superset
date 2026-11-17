@@ -136,8 +136,11 @@ test('the first line never names a version that changed nothing', async () => {
     },
   } as any);
 
-  const summary = await loadStaleSummary('dashboard', 'u', 'v0', async () =>
-    null,
+  const summary = await loadStaleSummary(
+    'dashboard',
+    'u',
+    'v0',
+    async () => null,
   );
 
   expect(summary?.changedBy).toBe('Priya');
@@ -151,6 +154,8 @@ test('fetchEtag rejects when the fresh read carries no ETag', async () => {
     response: new Response('{}'),
   } as any);
 
-  await expect(fetchEtag('/api/v1/chart/1')).rejects.toThrow();
+  await expect(fetchEtag('/api/v1/chart/1')).rejects.toThrow(
+    'Could not read the current version.',
+  );
   get.mockRestore();
 });

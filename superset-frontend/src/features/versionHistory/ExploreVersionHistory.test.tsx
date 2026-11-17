@@ -612,7 +612,10 @@ test.each(['open', 'closed', 'other chart', 'failed'])(
   'properties title save with history %s respects persistence and scope',
   async scenario => {
     fetchMock.get('glob:*/api/v1/chart/1*', {
-      result: { ...overwriteSlice, editors: [], viewers: [], tags: [] },
+      body: {
+        result: { ...overwriteSlice, editors: [], viewers: [], tags: [] },
+      },
+      headers: { ETag: '"v1"' },
     });
     fetchMock.put(
       'glob:*/api/v1/chart/1',
@@ -645,6 +648,8 @@ test.each(['open', 'closed', 'other chart', 'failed'])(
       { store: store as unknown as Store },
     );
     const name = await screen.findByRole('textbox', { name: 'Name' });
+    // editable once the modal's read on open has loaded the version
+    await waitFor(() => expect(name).toBeEnabled());
     await userEvent.clear(name);
     await userEvent.type(name, 'Renamed chart');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));

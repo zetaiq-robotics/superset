@@ -285,7 +285,7 @@ export function savePublished(
             ),
           );
           dispatch(togglePublished(isPublished));
-          // a single-field write: no If-Match, but it moves the version
+          // `If-Match: *` never refuses, but the write moves the version
           dispatch(adoptOwnWrite(id, json));
         }
       })

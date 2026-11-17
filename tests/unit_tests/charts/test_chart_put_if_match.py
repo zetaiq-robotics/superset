@@ -152,9 +152,7 @@ def test_chart_get_etag_for_unversioned_chart_is_unversioned_token(
     from superset.versioning.api_helpers import unversioned_entity_token
 
     chart, _ = _store_chart(mocker)
-    mocker.patch(
-        "superset.versioning.api_helpers._capture_enabled", return_value=True
-    )
+    mocker.patch("superset.versioning.api_helpers._capture_enabled", return_value=True)
     mocker.patch(
         "superset.versioning.api_helpers.VersionDAO.current_live_version_uuid",
         return_value=None,
