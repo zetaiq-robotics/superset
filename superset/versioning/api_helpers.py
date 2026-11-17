@@ -36,17 +36,26 @@ from __future__ import annotations
 
 import functools
 import logging
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Callable
 from uuid import UUID
 
 import sqlalchemy as sa
 from flask import Response
 from flask_appbuilder import Model
+from flask_babel import gettext as _
+from sqlalchemy.exc import OperationalError
 
 from superset.daos.version import VersionDAO
 from superset.extensions import db, security_manager
-from superset.versioning.etag import set_version_etag_by_uuid
+from superset.versioning.db_errors import is_lock_contention_error
+from superset.versioning.etag import (
+    is_conditional_write,
+    raise_for_stale_write,
+    set_version_etag,
+    set_version_etag_by_uuid,
+    StaleEntityError,
+)
 from superset.versioning.schemas import VersionListItemSchema
 
 #: Serializer for version rows (list items and the ``_version`` block of a
@@ -78,6 +87,10 @@ class EntityVersionInfo:
     #: re-run the ``SELECT uuid`` this helper already issued. Not part of the
     #: API response.
     entity_uuid: UUID | None = None
+    #: The row-locked, refreshed entity a conditional write holds for the
+    #: rest of the request (see :func:`guard_conditional_write`). Not part of
+    #: the API response.
+    locked_entity: Any = field(default=None, repr=False, compare=False)
 
 
 def _capture_enabled() -> bool:
@@ -288,6 +301,109 @@ def concurrency_token_from(info: EntityVersionInfo) -> str | None:
     if info.entity_uuid is None:
         return None
     return info.version_uuid or unversioned_entity_token(info.entity_uuid)
+
+
+def lock_contention_response(api: Any, noun: str) -> Response:
+    """The retryable 409 for a conditional save losing a lock race.
+
+    In the direct lock-acquisition and validator-read catches, the
+    rollback is LOAD-BEARING for lock-wait-timeout: with
+    ``innodb_rollback_on_timeout`` OFF (the MySQL default) a 1205
+    rolls back only the failing STATEMENT -- the transaction is still
+    alive and still holds any entity row lock already acquired, and
+    this rollback is what releases it. For a deadlock (1213) InnoDB
+    already rolled the transaction back and this clears the aborted
+    session before responding. The decorated command-failure path
+    already rolls back before raising; this shared cleanup is a
+    harmless no-op on that path, not an additional required rollback.
+    """
+    db.session.rollback()  # pylint: disable=consider-using-transaction
+    return api.response(
+        409,
+        message=_(
+            "Another save is in progress for this %(noun)s. Retry the same request.",
+            noun=noun,
+        ),
+    )
+
+
+def command_lost_lock_race(ex: BaseException) -> bool:
+    """Whether a conditional save's update command failed on lock contention.
+
+    The gap lock the conditional path's locking read takes on a zero-live-row
+    range can deadlock against another conditional writer at Continuum's
+    version-row INSERT inside the command; ``on_error`` chains the driver
+    error as ``__cause__`` and the update transaction has rolled back. Same
+    retryable classification as the guard's lock points: the token is not
+    proven stale. Unconditional saves keep their old error mapping.
+    """
+    return is_conditional_write() and is_lock_contention_error(ex.__cause__)
+
+
+def guard_conditional_write(
+    api: Any,
+    model_cls: type[Model],
+    pk: Any,
+    *,
+    noun: str,
+    stale_message: str,
+    lock: Callable[..., Any] = lock_entity_for_update,
+    read_version: Callable[..., EntityVersionInfo] = current_entity_version_info,
+    check_stale: Callable[[str | None], None] = raise_for_stale_write,
+) -> Response | EntityVersionInfo:
+    """Enforce ``If-Match`` on an entity PUT before its update command runs.
+
+    Returns a ready response (409 lock race lost; 412 stale token, with the
+    live version as ``ETag``) or the live :class:`EntityVersionInfo` for the
+    caller to continue with. The caller must keep the returned info alive
+    until its update command has run: it holds the locked entity.
+
+    Only a conditional save (one carrying ``If-Match``) pays for the locks;
+    an unconditional PUT behaves exactly as it did before the guard existed.
+
+    1. The entity row lock serialises conditional saves: the version read,
+       the command's write and another request's must not interleave.
+       Blocking here is the serialisation doing its job; LOSING the race
+       (deadlock, or lock-wait timeout after ``innodb_lock_wait_timeout``)
+       is the most common contention outcome of all lock points and maps to
+       the retryable 409. The locked entity is HELD (on the returned info):
+       the session's identity map references clean objects weakly, so a
+       discarded object could be collected and the command's ``find_by_id``
+       re-read a stale row on MySQL REPEATABLE READ (see
+       :func:`lock_entity_for_update`).
+    2. On the conditional path the live transaction id is read under an
+       exclusive row lock: a plain read is served from the request's
+       REPEATABLE READ snapshot on MySQL and can miss a concurrent commit,
+       letting a stale token pass. A lock race lost at that read proves
+       contention, not staleness, so it is also a 409 and the client
+       should retry the SAME request. The displayed version number and
+       lazy child reads can still observe an older MySQL REPEATABLE READ
+       snapshot; see :func:`lock_entity_for_update`.
+
+    ``lock`` / ``read_version`` / ``check_stale`` default to this module's
+    functions. Endpoints pass the names they import, so a test that patches
+    them on the endpoint module still intercepts the guard's calls.
+    """
+    conditional: bool = is_conditional_write()
+    locked_entity: Any = None
+    try:
+        if conditional:
+            locked_entity = lock(model_cls, pk)
+        info: EntityVersionInfo = read_version(
+            model_cls, pk, lock_for_stale_check=conditional
+        )
+    except OperationalError as ex:
+        if not (conditional and is_lock_contention_error(ex)):
+            raise
+        return lock_contention_response(api, noun)
+    info.locked_entity = locked_entity
+
+    token: str | None = concurrency_token_from(info)
+    try:
+        check_stale(token)
+    except StaleEntityError:
+        return set_version_etag(api.response(412, message=stale_message), token)
+    return info
 
 
 @functools.cache

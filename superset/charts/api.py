@@ -40,7 +40,7 @@ from flask_appbuilder.const import (
 )
 from flask_appbuilder.hooks import before_request
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_babel import ngettext
+from flask_babel import gettext as _, ngettext
 from marshmallow import ValidationError
 from sqlalchemy import asc, case, desc
 from sqlalchemy.orm import Query
@@ -132,13 +132,21 @@ from superset.utils.screenshots import (
 )
 from superset.utils.urls import get_url_path
 from superset.versioning.api_helpers import (
+    command_lost_lock_race,
     current_entity_etag_uuid,
     current_entity_version_info,
+    EntityVersionInfo,
     get_version_endpoint,
+    guard_conditional_write,
     list_versions_endpoint,
+    lock_contention_response,
+    lock_entity_for_update,
     restore_version_endpoint,
 )
-from superset.versioning.etag import set_version_etag
+from superset.versioning.etag import (
+    raise_for_stale_write,
+    set_version_etag,
+)
 from superset.versioning.schemas import VersionListItemSchema
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
@@ -832,6 +840,17 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
               $ref: '#/components/responses/403'
             404:
               $ref: '#/components/responses/404'
+            409:
+              description: >-
+                A concurrent save on this chart won a database lock race.
+                The ``If-Match`` token is not proven stale: retry the SAME
+                request.
+            412:
+              description: >-
+                The chart changed since the version named by the
+                ``If-Match`` header; nothing was saved. The ``ETag``
+                header carries the live version. Reopen the chart before
+                saving again.
             422:
               $ref: '#/components/responses/422'
             500:
@@ -845,10 +864,28 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
 
         normalization_changes: object = item.pop("normalization_changes", None)
 
-        # Live version identifiers before the update (empty + query-free when
-        # ``ENABLE_VERSIONING_CAPTURE`` is off, so this stays inert under the
-        # kill-switch).
-        old_info = current_entity_version_info(Slice, pk)
+        # Optimistic concurrency: If-Match → entity lock, locked version read,
+        # 409 on a lost lock race, 412 on a stale token (see
+        # guard_conditional_write). The locked functions are passed from this
+        # module so tests patching them here still intercept the guard.
+        guarded = guard_conditional_write(
+            self,
+            Slice,
+            pk,
+            noun="chart",
+            stale_message=_(
+                "The chart was changed by another user or browser tab "
+                "after you opened it. Reopen it to pick up the latest "
+                "version, then reapply your changes."
+            ),
+            lock=lock_entity_for_update,
+            read_version=current_entity_version_info,
+            check_stale=raise_for_stale_write,
+        )
+        if not isinstance(guarded, EntityVersionInfo):
+            return guarded
+        # Held until the command has run: it carries the locked entity.
+        old_info: EntityVersionInfo = guarded
 
         try:
             changed_model = UpdateChartCommand(
@@ -880,6 +917,11 @@ class ChartRestApi(SoftDeleteApiMixin, BaseSupersetModelRestApi):
         except ChartInvalidError as ex:
             response = self.response_422(message=ex.normalized_messages())
         except ChartUpdateFailedError as ex:
+            # A deadlock at the version-row INSERT inside the command arrives
+            # chained as ``__cause__``; on a conditional save it is the same
+            # retryable 409, not a 422.
+            if command_lost_lock_race(ex):
+                return lock_contention_response(self, "chart")
             logger.error(
                 "Error updating model %s: %s",
                 self.__class__.__name__,
