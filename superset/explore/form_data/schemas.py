@@ -35,6 +35,14 @@ class FormDataPostSchema(Schema):
         allow_none=False,
         metadata={"description": "Any type of JSON supported text."},
     )
+    version_uuid = fields.UUID(
+        required=False,
+        allow_none=True,
+        metadata={
+            "description": "The chart version the form data started from "
+            "(the client's If-Match base); restored with the form data."
+        },
+    )
 
 
 class FormDataPutSchema(Schema):
@@ -52,4 +60,12 @@ class FormDataPutSchema(Schema):
         required=True,
         allow_none=False,
         metadata={"description": "Any type of JSON supported text."},
+    )
+    version_uuid = fields.UUID(
+        required=False,
+        allow_none=True,
+        metadata={
+            "description": "The chart version the form data started from "
+            "(the client's If-Match base); restored with the form data."
+        },
     )

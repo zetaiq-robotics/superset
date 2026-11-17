@@ -28,3 +28,5 @@ class CommandParameters:
     tab_id: Optional[int] = None
     key: Optional[str] = None
     form_data: Optional[str] = None
+    # the client's base version for the chart the form data edits
+    version_uuid: Optional[str] = None

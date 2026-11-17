@@ -24,6 +24,7 @@ import { extendedDayjs } from '@superset-ui/core/utils/dates';
 export type VersionEntry = {
   version_uuid: string;
   issued_at?: string;
+  operation_type?: string;
   changed_by?: { first_name?: string } | null;
   changes?: {
     path: (string | number)[];
@@ -68,9 +69,13 @@ const LAYOUT_ID = /^(CHART|ROW|COLUMN|TABS?|HEADER|MARKDOWN|DIVIDER)-/;
 const authorOf = (v: VersionEntry) => v.changed_by?.first_name || t('Someone');
 
 // Oldest first, as the endpoint lists them. A base the history does not list
-// (an entity that had no version rows when the tab loaded) predates them all.
+// (an entity that had no version rows when the tab loaded) predates them all,
+// so the baseline row (the state before the first save, no changes) is in
+// range too: versions that changed nothing are no one's save to report.
 const newerThan = (versions: VersionEntry[], since?: string | null) =>
-  versions.slice(versions.findIndex(v => v.version_uuid === since) + 1);
+  versions
+    .slice(versions.findIndex(v => v.version_uuid === since) + 1)
+    .filter(v => v.operation_type !== 'baseline' && v.changes?.length);
 
 const filterIds = (value: unknown): Map<unknown, string> =>
   new Map(
@@ -182,8 +187,14 @@ export async function dashboardLastSave(id: number): Promise<StaleSummary> {
   return firstLineOnly(json?.result?.changed_by_name, json?.result?.changed_on);
 }
 
-/** The ETag the entity is served with now; read just before an overwrite. */
-export async function fetchEtag(endpoint: string): Promise<string | null> {
+/**
+ * The ETag the entity is served with now; read just before an overwrite.
+ * Rejects when there is none: an overwrite must never fall back to an
+ * unconditional PUT.
+ */
+export async function fetchEtag(endpoint: string): Promise<string> {
   const { response } = await SupersetClient.get({ endpoint });
-  return response?.headers?.get('ETag') ?? null;
+  const etag = response?.headers?.get('ETag');
+  if (!etag) throw new Error(t('Could not read the current version.'));
+  return etag;
 }

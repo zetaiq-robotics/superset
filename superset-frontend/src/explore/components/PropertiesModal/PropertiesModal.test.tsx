@@ -20,13 +20,20 @@
  */
 
 import {
+  createStore,
   render,
   screen,
   userEvent,
   waitFor,
 } from 'spec/helpers/testing-library';
+import reducerIndex from 'spec/helpers/reducerIndex';
+import { ToastType } from 'src/components/MessageToasts/types';
 import fetchMock from 'fetch-mock';
-import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
+import {
+  isFeatureEnabled,
+  FeatureFlag,
+  SupersetClient,
+} from '@superset-ui/core';
 import PropertiesModal, { PropertiesModalProps } from '.';
 
 jest.mock('@superset-ui/core', () => ({
@@ -122,6 +129,13 @@ fetchMock.put('glob:*/api/v1/chart/318', {
       slice_name: 'Age distribution of respondents',
     },
   },
+});
+
+// who saved last, for the stale-save modal's first line (Explore's list read)
+fetchMock.get('glob:*/api/v1/chart/?q=*', {
+  result: [
+    { changed_by_name: 'Priya Rao', changed_on_utc: '2026-11-17T09:30:00' },
+  ],
 });
 
 afterAll(() => {
@@ -429,4 +443,110 @@ test('certification is not offered, and saving leaves it as it was', async () =>
   await waitFor(() => expect(props.onSave).toHaveBeenCalled());
   const sent = JSON.parse(String(fetchMock.callHistory.calls('glob:*/api/v1/chart/318').filter(c => c.options?.method?.toUpperCase() === 'PUT').pop()?.options?.body));
   expect(sent).toMatchObject({ certified_by: 'John Doe', certification_details: 'Sample certification' });
+});
+
+// The modal's GET on open answers v5; any later read of the chart (the
+// Overwrite's fresh read) answers `fresh` (null: no ETag). The PUTs are
+// refused with `refusals` in order, then succeed.
+const staleChartProperties = async (
+  refusals: number[] = [412],
+  fresh: string | null = '"v6"',
+) => {
+  const { get } = SupersetClient;
+  const getSpy = jest
+    .spyOn(SupersetClient, 'get')
+    .mockImplementation((request: any) => {
+      if (!request.endpoint?.startsWith('/api/v1/chart/318')) {
+        return get(request);
+      }
+      const onOpen = request.endpoint.includes('?q=');
+      const etag = onOpen ? '"v5"' : fresh;
+      return get(request).then((r: any) => ({
+        json: r.json,
+        response: new Response('{}', etag ? { headers: { ETag: etag } } : {}),
+      }));
+    });
+  const put = jest.spyOn(SupersetClient, 'put');
+  refusals.forEach(status =>
+    put.mockRejectedValueOnce(new Response('{}', { status })),
+  );
+  put.mockResolvedValue({
+    json: { result: {}, old_version_uuid: 'v6', new_version_uuid: 'v7' },
+  } as any);
+  const props = createProps();
+  const store = createStore({}, reducerIndex);
+  render(<PropertiesModal {...props} />, { useRedux: true, store });
+  await waitFor(() => expect(getSpy).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled(),
+  );
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  return {
+    props,
+    put,
+    dangerToasts: () =>
+      store
+        .getState()
+        .messageToasts.filter((toast: any) => toast.toastType === ToastType.Danger),
+    ifMatches: () =>
+      put.mock.calls.map(([req]: any) => req.headers?.['If-Match']),
+    restore: () => [getSpy, put].forEach(spy => spy.mockRestore()),
+  };
+};
+
+test('a properties save sends If-Match from the version the modal loaded', async () => {
+  const { put, ifMatches, restore } = await staleChartProperties([]);
+
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+  expect(ifMatches()).toEqual(['"v5"']);
+  restore();
+});
+
+test('a refused properties save opens the stale-save modal', async () => {
+  const { restore } = await staleChartProperties();
+
+  expect(
+    await screen.findByText('This chart was changed after you opened it'),
+  ).toBeInTheDocument();
+  restore();
+});
+
+test('Overwrite resends the properties with the version saved now', async () => {
+  const { props, put, ifMatches, restore } = await staleChartProperties();
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Overwrite their changes' }),
+  );
+
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+  expect(ifMatches()).toEqual(['"v5"', '"v6"']);
+  await waitFor(() => expect(props.onSave).toHaveBeenCalled());
+  restore();
+});
+
+test('an Overwrite that fails keeps the loaded version for the next save', async () => {
+  const { put, ifMatches, restore } = await staleChartProperties([412, 500]);
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Overwrite their changes' }),
+  );
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(put).toHaveBeenCalledTimes(3));
+  expect(ifMatches()).toEqual(['"v5"', '"v6"', '"v5"']);
+  restore();
+});
+
+test('an Overwrite whose fresh read has no ETag sends no PUT and shows an error', async () => {
+  const { put, dangerToasts, restore } = await staleChartProperties(
+    [412],
+    null,
+  );
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Overwrite their changes' }),
+  );
+
+  await waitFor(() => expect(dangerToasts()).toHaveLength(1));
+  expect(put).toHaveBeenCalledTimes(1);
+  restore();
 });

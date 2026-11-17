@@ -47,6 +47,7 @@ from flask_babel import gettext as _
 from sqlalchemy.exc import OperationalError
 
 from superset.daos.version import VersionDAO
+from superset.exceptions import SupersetSecurityException
 from superset.extensions import db, security_manager
 from superset.versioning.db_errors import is_lock_contention_error
 from superset.versioning.etag import (
@@ -270,6 +271,13 @@ def lock_entity_for_update(
     staleness class; the matching locking-refresh fix is proposed in
     apache/superset#44015.)
 
+    On Postgres the lock is ``FOR NO KEY UPDATE`` (``key_share=True``): it
+    still serialises writers on the row, but does not conflict with the
+    ``KEY SHARE`` lock a foreign-key check takes (for example an insert
+    into ``dashboard_slices`` referencing this dashboard), which a plain
+    ``FOR UPDATE`` would block on and can deadlock against. MySQL ignores
+    the flag and renders ``FOR UPDATE``.
+
     Renders no ``FOR UPDATE`` on SQLite, which serialises writers anyway.
 
     Missing rows are not this function's concern: ``None`` is returned
@@ -287,7 +295,7 @@ def lock_entity_for_update(
         db.session.query(model_cls)
         .populate_existing()
         .filter(model_cls.id == entity_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
         .one_or_none()
     )
 
@@ -374,6 +382,17 @@ def read_version_for_write(
     return info
 
 
+def _may_edit(entity: Any) -> bool:
+    """Whether the caller passes the update commands' editorship check."""
+    if entity is None:  # missing: the command answers 404
+        return False
+    try:
+        security_manager.raise_for_editorship(entity)
+    except SupersetSecurityException:
+        return False
+    return True
+
+
 def guard_conditional_write(
     api: Any,
     model_cls: type[Model],
@@ -413,6 +432,11 @@ def guard_conditional_write(
        should retry the SAME request. The displayed version number and
        lazy child reads can still observe an older MySQL REPEATABLE READ
        snapshot; see :func:`lock_entity_for_update`.
+    3. A stale token is answered 412 only to a caller who may edit the
+       entity. For anyone else (or a missing entity) the lock is released
+       and the request goes on, so the update command answers 403/404
+       exactly as it does without ``If-Match``: no live ``ETag`` and no row
+       lock for a caller who cannot save.
 
     ``lock`` / ``read_version`` / ``check_stale`` default to this module's
     functions. Endpoints pass the names they import, so a test that patches
@@ -434,6 +458,10 @@ def guard_conditional_write(
     try:
         check_stale(token)
     except StaleEntityError:
+        if not _may_edit(info.locked_entity):
+            db.session.rollback()  # pylint: disable=consider-using-transaction
+            info.locked_entity = None
+            return info
         return set_version_etag(api.response(412, message=stale_message), token)
     return info
 

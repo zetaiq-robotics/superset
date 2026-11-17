@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from typing import Any, Optional
 
 from flask import request, Response
 from flask_appbuilder.api import expose, protect, safe
@@ -36,6 +37,11 @@ from superset.extensions import event_logger
 from superset.views.base_api import BaseSupersetApi, requires_json, statsd_metrics
 
 logger = logging.getLogger(__name__)
+
+
+def _version(item: dict[str, Any]) -> Optional[str]:
+    version = item.get("version_uuid")
+    return str(version) if version else None
 
 
 class ExploreFormDataRestApi(BaseSupersetApi):
@@ -102,6 +108,7 @@ class ExploreFormDataRestApi(BaseSupersetApi):
                 chart_id=item.get("chart_id"),
                 tab_id=tab_id,
                 form_data=item["form_data"],
+                version_uuid=_version(item),
             )
             key = CreateFormDataCommand(args).run()
             return self.response(201, key=key)
@@ -175,6 +182,7 @@ class ExploreFormDataRestApi(BaseSupersetApi):
                 tab_id=tab_id,
                 key=key,
                 form_data=item["form_data"],
+                version_uuid=_version(item),
             )
             result = UpdateFormDataCommand(args).run()
             if not result:

@@ -198,6 +198,8 @@ const updateHistory = debounce(
     tabId,
     history,
     sliceId,
+    // the chart version the form data started from, stored with it
+    versionUuid,
   ) => {
     const payload = { ...formData };
     const chartId = formData.slice_id;
@@ -227,6 +229,7 @@ const updateHistory = debounce(
           formData,
           chartId,
           tabId,
+          versionUuid,
         );
       } else {
         key = getUrlParam(URL_PARAMS.formDataKey);
@@ -241,6 +244,7 @@ const updateHistory = debounce(
               formData,
               chartId,
               tabId,
+              versionUuid,
             )) || key;
         }
       }
@@ -540,6 +544,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
         tabId,
         history,
         restoreTarget.slice_id,
+        props.slice?.version_uuid,
       );
     },
     [
@@ -552,6 +557,7 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
       props.force,
       tabId,
       history,
+      props.slice?.version_uuid,
     ],
   );
 

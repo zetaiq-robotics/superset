@@ -22,6 +22,7 @@ import {
   isFeatureEnabled,
 } from '@superset-ui/core';
 import { waitFor } from 'spec/helpers/testing-library';
+import { logging } from '@apache-superset/core/utils';
 
 import {
   SAVE_DASHBOARD_STARTED,
@@ -228,6 +229,11 @@ describe('dashboardState actions', () => {
       });
 
       test('should post dashboard data with after confirm the overwrite values', async () => {
+        // the overwrite re-reads the version first; it needs an ETag
+        getStub.mockResolvedValue({
+          json: { result: mockDashboardData },
+          response: new Response('{}', { headers: { ETag: '"now"' } }),
+        } as any);
         const id = 192;
         const { getState, dispatch } = setup();
         const confirmedDashboardData = {
@@ -1231,6 +1237,7 @@ function stubWrites(replaced: string, created: string, result: unknown = []) {
     .mockResolvedValue({ json: { result: [] } } as any);
   return {
     put,
+    get,
     restore: () => [request, put, get].forEach(s => s.mockRestore()),
   };
 }
@@ -1349,4 +1356,61 @@ test('a write that lands after navigating to another dashboard is ignored', asyn
 
   expect(getState().dashboardInfo.versions).toEqual({ base: 'a', latest: 'a' });
   stubs.restore();
+});
+
+test('the published toggle sends If-Match: * so its replaced version is read under the lock', async () => {
+  const stubs = stubWrites('a', 'b');
+  const { dispatch } = liveStore({ base: 'a', latest: 'a' });
+
+  await dispatch(savePublished(1, true));
+
+  expect(lastPutHeaders(stubs.put)['If-Match']).toBe('*');
+  stubs.restore();
+});
+
+test('an overwrite whose fresh read has no ETag sends no PUT and shows an error', async () => {
+  const stubs = stubWrites('a', 'b');
+  stubs.get.mockResolvedValue({
+    json: { result: mockDashboardData },
+    response: new Response('{}'),
+  } as any);
+  const { dispatch, getState } = liveStore({ base: 'a', latest: 'a' });
+  const seen: any[] = [];
+  const recording = (action: any) => {
+    seen.push(action);
+    return dispatch(action);
+  };
+
+  await saveDashboardRequest(
+    mockDashboardData,
+    1,
+    SAVE_TYPE_OVERWRITE_CONFIRMED,
+  )(recording, getState);
+
+  expect(stubs.put).not.toHaveBeenCalled();
+  expect(
+    seen.some(
+      a => a?.type === ADD_TOAST && a.payload.toastType === ToastType.Danger,
+    ),
+  ).toBe(true);
+  stubs.restore();
+});
+
+test('a refused colour sync is logged, never an unhandled rejection', async () => {
+  const put = jest
+    .spyOn(SupersetClient, 'put')
+    .mockRejectedValue(new Response('{}', { status: 409 }));
+  const logged = jest.spyOn(logging, 'warn').mockImplementation(() => {});
+  const unhandled = jest.fn();
+  process.on('unhandledRejection', unhandled);
+  const { dispatch } = liveStore({ base: 'a', latest: 'a' });
+
+  await dispatch(persistDashboardLabelsColor());
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  process.off('unhandledRejection', unhandled);
+  expect(unhandled).not.toHaveBeenCalled();
+  expect(logged).toHaveBeenCalled();
+  put.mockRestore();
+  logged.mockRestore();
 });

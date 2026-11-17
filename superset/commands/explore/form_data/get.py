@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 class GetFormDataCommand(BaseCommand, ABC):
     def __init__(self, cmd_params: CommandParameters) -> None:
         self._cmd_params = cmd_params
+        # the entry ``run`` found, for callers that need more than form data
+        self.state: Optional[TemporaryExploreState] = None
         self._refresh_timeout = app.config["EXPLORE_FORM_DATA_CACHE_CONFIG"].get(
             "REFRESH_TIMEOUT_ON_RETRIEVAL"
         )
@@ -53,6 +55,7 @@ class GetFormDataCommand(BaseCommand, ABC):
                 )
                 if self._refresh_timeout:
                     cache_manager.explore_form_data_cache.set(key, state)
+                self.state = state
                 return state["form_data"]
             return None
         except SQLAlchemyError as ex:

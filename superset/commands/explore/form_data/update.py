@@ -78,6 +78,10 @@ class UpdateFormDataCommand(BaseCommand, ABC):
                     "datasource_type": DatasourceType(datasource_type),
                     "chart_id": chart_id,
                     "form_data": form_data,
+                    # the version the edits started from moves only with the
+                    # client's own base (after its own save), never to live
+                    "version_uuid": self._cmd_params.version_uuid
+                    or state.get("version_uuid"),
                 }
                 cache_manager.explore_form_data_cache.set(key, new_state)
             return key

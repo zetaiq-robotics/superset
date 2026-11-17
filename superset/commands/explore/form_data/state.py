@@ -16,6 +16,8 @@
 # under the License.
 from typing import Optional, TypedDict
 
+from typing_extensions import NotRequired
+
 from superset.utils.core import DatasourceType
 
 
@@ -25,3 +27,6 @@ class TemporaryExploreState(TypedDict):
     datasource_type: DatasourceType
     chart_id: Optional[int]
     form_data: str
+    # The chart version the form data started from: Explore's If-Match base
+    # when the entry is restored. Absent on entries written before it existed.
+    version_uuid: NotRequired[Optional[str]]

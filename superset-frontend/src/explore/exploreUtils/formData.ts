@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: the key the form-data cache answers with is returned to the caller.
+ * Modified by ZetaIQ: the key the form-data cache answers with is returned to the caller; the tab's base
+ * chart version is stored with the form data, so a restore keeps the version the edits started from.
  */
 import { SupersetClient, JsonObject, JsonResponse } from '@superset-ui/core';
 import { sanitizeFormData } from 'src/utils/sanitizeFormData';
@@ -26,6 +27,7 @@ type Payload = {
   datasource_type: string;
   form_data: string;
   chart_id?: number;
+  version_uuid?: string;
 };
 
 const assembleEndpoint = (key?: string, tabId?: string) => {
@@ -42,6 +44,7 @@ const assemblePayload = (
   datasourceType: string,
   formData: JsonObject,
   chartId?: number,
+  versionUuid?: string | null,
 ): Payload => {
   const payload: Payload = {
     datasource_id: datasourceId,
@@ -50,6 +53,7 @@ const assemblePayload = (
   };
 
   if (chartId) payload.chart_id = chartId;
+  if (versionUuid) payload.version_uuid = versionUuid;
 
   return payload;
 };
@@ -60,6 +64,7 @@ export const postFormData = (
   formData: JsonObject,
   chartId?: number,
   tabId?: string,
+  versionUuid?: string | null,
 ): Promise<string> =>
   SupersetClient.post({
     endpoint: assembleEndpoint(undefined, tabId),
@@ -68,6 +73,7 @@ export const postFormData = (
       datasourceType,
       formData,
       chartId,
+      versionUuid,
     ),
   }).then((r: JsonResponse) => r.json.key);
 
@@ -78,6 +84,7 @@ export const putFormData = (
   formData: JsonObject,
   chartId?: number,
   tabId?: string,
+  versionUuid?: string | null,
 ): Promise<string> =>
   SupersetClient.put({
     endpoint: assembleEndpoint(key, tabId),
@@ -86,5 +93,6 @@ export const putFormData = (
       datasourceType,
       formData,
       chartId,
+      versionUuid,
     ),
   }).then((r: JsonResponse) => r.json.key);

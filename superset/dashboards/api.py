@@ -45,6 +45,7 @@ from flask_appbuilder.const import (
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import gettext, ngettext
 from marshmallow import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.wrappers import Response as WerkzeugResponse
 from werkzeug.wsgi import FileWrapper
 
@@ -171,6 +172,7 @@ from superset.tasks.thumbnails import (
 from superset.tasks.utils import get_current_user
 from superset.utils import json
 from superset.utils.core import (
+    get_user_id,
     parse_boolean_string,
     send_export_zip,
     write_zip_entry,
@@ -269,9 +271,18 @@ def _locked_version_read(api: Any, pk: Any) -> Response | EntityVersionInfo:
 def _version_pair_response(
     api: Any, pk: Any, old_info: EntityVersionInfo, **kwargs: Any
 ) -> Response:
-    """200 for a single-field dashboard write: the version pair plus ``ETag``."""
-    new_info = current_entity_version_info(Dashboard, pk, old_info.entity_uuid)
-    new_token = concurrency_token_from(new_info)
+    """200 for a single-field dashboard write: the version pair plus ``ETag``.
+
+    The write has committed, so a failed "after" read still answers 200,
+    with ``new_version_uuid: null`` and no ``ETag``: the client keeps its
+    base (at worst a false 412 later, never a missed conflict).
+    """
+    try:
+        new_info = current_entity_version_info(Dashboard, pk, old_info.entity_uuid)
+        new_token = concurrency_token_from(new_info)
+    except SQLAlchemyError:
+        logger.exception("Reading the version after a dashboard write failed")
+        new_token = None
     return set_version_etag(
         api.response(
             200,
@@ -288,7 +299,10 @@ def dashboard_access_etag(dash: Dashboard, version_uuid: str | None) -> str | No
 
     Editors and viewers are not part of the versioned row, so a change to
     them alone leaves the version uuid where it was. The hash makes the tag
-    move anyway, so a client comparing tags sees access changes too. Writes
+    move anyway, so a client comparing tags sees access changes too. The
+    hash also covers the requesting user: the GET body (its chart list) is
+    filtered per user, so a browser cache keyed by URL must not answer one
+    user's conditional GET with 304 for another user's body. Writes
     compare only the part before the first ``:`` (see
     :func:`~superset.versioning.etag.raise_for_stale_write`), so ``If-Match``
     still checks the version alone.
@@ -299,7 +313,7 @@ def dashboard_access_etag(dash: Dashboard, version_uuid: str | None) -> str | No
     def ids(subjects: Any) -> str:
         return ",".join(str(i) for i in sorted(s.id for s in subjects))
 
-    access = f"{ids(dash.editors)}|{ids(dash.viewers)}"
+    access = f"{get_user_id()}|{ids(dash.editors)}|{ids(dash.viewers)}"
     return f"{version_uuid}:{hashlib.sha256(access.encode()).hexdigest()[:16]}"
 
 

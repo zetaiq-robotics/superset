@@ -1181,12 +1181,18 @@ test('addChartToDashboard gives up after a second 412', async () => {
   put.mockRestore();
 });
 
-const staleSetup = () => {
+const staleSetup = (
   // the chart GET answers with the version saved now
+  freshHeaders: Record<string, string> = { ETag: '"now:access"' },
+  newDashboard?: string,
+) => {
   fetchMock.removeRoutes();
   fetchMock.get('glob:*/api/v1/chart/1', {
     body: { result: { id: 1 } },
-    headers: { ETag: '"now:access"' },
+    headers: freshHeaders,
+  });
+  fetchMock.get('glob:*/api/v1/dashboard/7', {
+    body: { result: { id: 7, dashboard_title: newDashboard } },
   });
   const actions = {
     setFormData: jest.fn(),
@@ -1203,6 +1209,7 @@ const staleSetup = () => {
       )
       .mockResolvedValue({ id: 1 }),
     createSlice: jest.fn().mockResolvedValue({ id: 2 }),
+    createDashboard: jest.fn().mockResolvedValue({ id: 7 }),
   };
   const view = setup(
     { ...defaultProps, actions, sliceName: 'title' },
@@ -1212,6 +1219,11 @@ const staleSetup = () => {
     }),
   );
   fireEvent.click(view.getByRole('radio', { name: 'Save (Overwrite)' }));
+  if (newDashboard) {
+    fireEvent.change(view.getByTestId('mock-async-select'), {
+      target: { value: newDashboard },
+    });
+  }
   fireEvent.click(view.getByRole('button', { name: 'Save' }));
   return { ...view, actions };
 };
@@ -1272,4 +1284,38 @@ test('chart Save as a copy uses save-as', async () => {
 
   await waitFor(() => expect(actions.createSlice).toHaveBeenCalledTimes(1));
   expect(actions.updateSlice).toHaveBeenCalledTimes(1);
+});
+
+test('a chart Overwrite whose fresh read has no ETag sends no save', async () => {
+  const { findByRole, actions } = staleSetup({});
+
+  fireEvent.click(
+    await findByRole('button', { name: 'Overwrite their changes' }),
+  );
+
+  await waitFor(() => expect(actions.saveSliceFailed).toHaveBeenCalled());
+  expect(actions.updateSlice).toHaveBeenCalledTimes(1);
+});
+
+test('a refused overwrite into a new dashboard reuses it on Overwrite', async () => {
+  const { findByRole, actions } = staleSetup(undefined, 'Fresh dashboard');
+
+  fireEvent.click(
+    await findByRole('button', { name: 'Overwrite their changes' }),
+  );
+
+  await waitFor(() => expect(actions.updateSlice).toHaveBeenCalledTimes(2));
+  expect(actions.createDashboard).toHaveBeenCalledTimes(1);
+  expect(actions.updateSlice.mock.calls[1][1]).toEqual(
+    actions.updateSlice.mock.calls[0][1],
+  );
+});
+
+test('a refused overwrite into a new dashboard reuses it on Save as a copy', async () => {
+  const { findByRole, actions } = staleSetup(undefined, 'Fresh dashboard');
+
+  fireEvent.click(await findByRole('button', { name: 'Save as a copy' }));
+
+  await waitFor(() => expect(actions.createSlice).toHaveBeenCalledTimes(1));
+  expect(actions.createDashboard).toHaveBeenCalledTimes(1);
 });
