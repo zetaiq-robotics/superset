@@ -43,6 +43,7 @@ import Subject from 'src/types/Subject';
 import { TagType } from 'src/components/Tag/TagType';
 import { ChartState } from '../explore/types';
 import { AutoRefreshStatus } from './types/autoRefresh';
+import type { Versions } from './live/versionTracker';
 
 export type { Dashboard } from 'src/types/Dashboard';
 
@@ -226,6 +227,8 @@ export type DashboardInfo = {
   dash_share_perm?: boolean;
   dash_save_perm?: boolean;
   dash_export_perm?: boolean;
+  // base / latest version this tab knows of (src/dashboard/live/versionTracker)
+  versions?: Versions;
 };
 
 export type ChartsState = { [key: string]: Chart };
@@ -366,6 +369,8 @@ export type Slice = {
   datasource_name: string;
   editors: { id: number }[];
   created_by: { id: number };
+  // Explore's copy only: the version it was loaded at, sent as If-Match
+  version_uuid?: string | null;
 };
 
 export interface SliceEntitiesState {

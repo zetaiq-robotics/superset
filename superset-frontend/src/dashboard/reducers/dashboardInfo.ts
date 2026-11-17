@@ -28,7 +28,14 @@ import {
   SET_FILTER_BAR_ORIENTATION,
   SET_CROSS_FILTERS_ENABLED,
   DASHBOARD_INFO_FILTERS_CHANGED,
+  DASHBOARD_OWN_WRITE,
+  SET_DASHBOARD_VERSIONS,
 } from '../actions/dashboardInfo';
+import {
+  adoptAfterOwnWrite,
+  NO_VERSIONS,
+  Versions,
+} from '../live/versionTracker';
 import {
   SAVE_CHART_CUSTOMIZATION_COMPLETE,
   SET_CHART_CUSTOMIZATION_DATA_LOADING,
@@ -126,6 +133,23 @@ export default function dashboardInfoReducer(
   action: DashboardInfoReducerAction,
 ): DashboardInfoState {
   switch (action.type) {
+    case SET_DASHBOARD_VERSIONS:
+      return {
+        ...state,
+        versions: (action as DashboardInfoAction).versions as Versions,
+      };
+    case DASHBOARD_OWN_WRITE: {
+      const { dashboardId, replaced, created } = action as DashboardInfoAction;
+      if (dashboardId !== state.id) return state;
+      return {
+        ...state,
+        versions: adoptAfterOwnWrite(
+          state.versions ?? NO_VERSIONS,
+          replaced as string | null,
+          created as string | null,
+        ),
+      };
+    }
     case DASHBOARD_SAVE_SUCCEEDED:
       return (action as DashboardInfoAction).dashboardId === state.id
         ? {

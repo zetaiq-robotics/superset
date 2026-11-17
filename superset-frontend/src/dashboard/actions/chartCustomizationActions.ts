@@ -34,7 +34,11 @@ import {
   removeDataMask,
   setDataMaskForFilterChangesComplete,
 } from 'src/dataMask/actions';
-import { dashboardInfoChanged, dashboardSaveSucceeded } from './dashboardInfo';
+import {
+  adoptOwnWrite,
+  dashboardInfoChanged,
+  dashboardSaveSucceeded,
+} from './dashboardInfo';
 import {
   SET_NATIVE_FILTERS_CONFIG_COMPLETE,
   SET_IN_SCOPE_STATUS_OF_FILTERS,
@@ -105,6 +109,8 @@ export function saveChartCustomization(
         deleted: deletedIds,
         reordered: reorderedIds,
       });
+      // a single-field write: no If-Match, but it moves the version
+      dispatch(adoptOwnWrite(id, response));
 
       dispatch(dashboardSaveSucceeded(id));
 

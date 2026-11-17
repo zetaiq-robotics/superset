@@ -45,6 +45,7 @@ import {
 import Chart, { Slice } from 'src/types/Chart';
 import { useAppDispatch } from 'src/views/store';
 import { saveSliceSuccess } from 'src/explore/actions/saveModalActions';
+import { adoptAfterOwnWrite } from 'src/dashboard/live/versionTracker';
 import withToasts from 'src/components/MessageToasts/withToasts';
 import { type TagType } from 'src/components';
 import { TagTypeEnum } from 'src/components/Tag/TagType';
@@ -257,16 +258,23 @@ function PropertiesModal({
 
     try {
       const chartEndpoint = `/api/v1/chart/${slice.slice_id}`;
-      let res = await SupersetClient.put({
+      const { json: written } = await SupersetClient.put({
         endpoint: chartEndpoint,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       dispatch(saveSliceSuccess({ id: slice.slice_id }));
-      res = await SupersetClient.get({
+      const res = await SupersetClient.get({
         endpoint: chartEndpoint,
       });
-      onSave(res.json.result);
+      // this write moved the chart's version: adopt it, or Explore's next
+      // overwrite would be refused for this tab's own change
+      const { base } = adoptAfterOwnWrite(
+        { base: slice.version_uuid ?? null, latest: null },
+        written.old_version_uuid ?? null,
+        written.new_version_uuid ?? null,
+      );
+      onSave({ ...res.json.result, version_uuid: base });
       addSuccessToast(t('Chart properties updated'));
       onHide();
     } catch (res) {

@@ -56,6 +56,7 @@ import newComponentFactory, {
   DashboardEntity,
 } from 'src/dashboard/util/newComponentFactory';
 import removeUnreachableComponents from 'src/dashboard/util/removeUnreachableComponents';
+import { versionOf } from 'src/dashboard/live/versionTracker';
 import { URL_PARAMS } from 'src/constants';
 import { getUrlParam } from 'src/utils/urlUtils';
 import { ResourceStatus } from 'src/hooks/apiResources/apiResources';
@@ -395,6 +396,11 @@ export const hydrateDashboard =
           filterBarOrientation:
             metadata.filter_bar_orientation || FilterBarOrientation.Vertical,
           crossFiltersEnabled,
+          // this copy is the base every later full save is checked against
+          versions: {
+            base: versionOf(dashboard.etag ?? null),
+            latest: versionOf(dashboard.etag ?? null),
+          },
         },
         dataMask,
         dashboardFilters,

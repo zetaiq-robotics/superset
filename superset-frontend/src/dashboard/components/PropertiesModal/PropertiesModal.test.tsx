@@ -114,6 +114,7 @@ fetchMock.get('glob:*/api/v1/dashboard/26', {
   body: {
     result: { ...dashboardInfo, json_metadata: mockedJsonMetadata },
   },
+  headers: { ETag: '"v26:accesshash"' },
 });
 
 fetchMock.get('glob:*/api/v1/theme/*', {
@@ -531,6 +532,26 @@ describe('PropertiesModal', () => {
       expect(submitCall.title).toBe('COVID Vaccine Dashboard');
       // certifiedBy and certificationDetails come from dashboardInfo, not props
     });
+  });
+
+  test('save sends If-Match with the version the modal loaded', async () => {
+    const put = jest.spyOn(SupersetCore.SupersetClient, 'put');
+    put.mockResolvedValue({ json: { result: {} } } as any);
+    mockedIsFeatureEnabled.mockReturnValue(false);
+    const props = createProps();
+    // no dashboardInfo: the modal loads the dashboard itself (list pages)
+    render(<PropertiesModal {...props} />, { useRedux: true });
+
+    expect(
+      await screen.findByTestId('dashboard-edit-properties-form'),
+    ).toBeInTheDocument();
+    userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    expect(put.mock.calls[0][0].headers).toMatchObject({
+      'If-Match': '"v26"',
+    });
+    put.mockRestore();
   });
 
   test('preserves certification fields on save without opening Certification section', async () => {

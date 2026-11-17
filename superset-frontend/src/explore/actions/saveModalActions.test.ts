@@ -1003,3 +1003,35 @@ test('existing-chart overwrite restores a stash-held value instead of dropping i
   expect(savedParams.order_desc).toBe(true);
   expect(body.normalization_changes).toBeUndefined();
 });
+
+test('overwrite sends If-Match from explore version_uuid', async () => {
+  fetchMock.put(updateSliceEndpoint, sliceResponsePayload, {
+    name: updateSliceEndpoint,
+  });
+  const getState = () => ({ explore: { form_data: formData } });
+
+  await updateSlice(
+    { ...sliceResponsePayload, slice_id: sliceId, version_uuid: 'v1' } as never,
+    sliceName,
+    [],
+  )(jest.fn(), getState as never);
+
+  const request = fetchMock.callHistory.lastCall(updateSliceEndpoint);
+  expect(new Headers(request?.options.headers).get('If-Match')).toBe('"v1"');
+});
+
+test('overwrite of a chart with no version sends no If-Match', async () => {
+  fetchMock.put(updateSliceEndpoint, sliceResponsePayload, {
+    name: updateSliceEndpoint,
+  });
+  const getState = () => ({ explore: { form_data: formData } });
+
+  await updateSlice(
+    { ...sliceResponsePayload, slice_id: sliceId, version_uuid: null } as never,
+    sliceName,
+    [],
+  )(jest.fn(), getState as never);
+
+  const request = fetchMock.callHistory.lastCall(updateSliceEndpoint);
+  expect(new Headers(request?.options.headers).has('If-Match')).toBe(false);
+});

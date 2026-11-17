@@ -30,6 +30,7 @@ import {
 import { addSuccessToast } from 'src/components/MessageToasts/actions';
 import { isEmpty } from 'lodash-es';
 import { Slice } from 'src/dashboard/types';
+import { ifMatch } from 'src/dashboard/live/versionTracker';
 import { Operators } from '../constants';
 import { buildV1ChartDataPayload } from '../exploreUtils';
 import { nanoid } from 'nanoid';
@@ -304,8 +305,10 @@ export const updateSlice =
       ) {
         payload.normalization_changes = Object.values(matchingTransitions);
       }
+      // a stale version answers 412, which reaches the caller as a failure
       const response = await SupersetClient.put({
         endpoint: `/api/v1/chart/${sliceId}`,
+        headers: ifMatch(slice.version_uuid),
         jsonPayload: payload,
       });
 

@@ -67,7 +67,9 @@ import { ResourceStatus } from 'src/hooks/apiResources/apiResources';
 import type { AgGridChartState } from '@superset-ui/core';
 import type { DashboardChartStates } from 'src/dashboard/types/chartState';
 import { UPDATE_COMPONENTS_PARENTS_LIST } from './dashboardLayout';
+import { ifMatch } from 'src/dashboard/live/versionTracker';
 import {
+  adoptOwnWrite,
   saveChartConfiguration,
   dashboardInfoChanged,
   SAVE_CHART_CONFIG_COMPLETE,
@@ -256,7 +258,7 @@ export function savePublished(
         published: isPublished,
       }),
     })
-      .then(() => {
+      .then(({ json }) => {
         // Only update state if this is still the current dashboard
         // This prevents stale responses from affecting the UI after navigation
         const currentId = getState().dashboardInfo?.id;
@@ -269,6 +271,8 @@ export function savePublished(
             ),
           );
           dispatch(togglePublished(isPublished));
+          // a single-field write: no If-Match, but it moves the version
+          dispatch(adoptOwnWrite(id, json));
         }
       })
       .catch(async (response: Response) => {
@@ -685,11 +689,16 @@ export function saveDashboardRequest(
 
       const updateDashboard = async (): Promise<JsonObject | void> => {
         try {
+          // a stale base answers 412, which onError reports like any failure
           const response = await SupersetClient.put({
             endpoint: `/api/v1/dashboard/${id}`,
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              ...ifMatch(getState().dashboardInfo?.versions?.base),
+            },
             body: JSON.stringify(updatedDashboard),
           });
+          dispatch(adoptOwnWrite(id, response.json));
           return await onUpdateSuccess(response);
         } catch (error) {
           return onError(error as Response);
@@ -1283,7 +1292,9 @@ export const persistDashboardLabelsColor =
     if (labelsColorMapMustSync || sharedLabelsColorsMustSync) {
       dispatch(setDashboardLabelsColorMapSynced());
       dispatch(setDashboardSharedLabelsColorsSynced());
-      storeDashboardColorConfig(id, metadata);
+      storeDashboardColorConfig(id, metadata).then(({ json }) =>
+        dispatch(adoptOwnWrite(id, json)),
+      );
     }
   };
 
