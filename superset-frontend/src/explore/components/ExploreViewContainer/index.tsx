@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the chart version the form data started from is stored with it.
  */
 /* eslint camelcase: 0 */
 import {

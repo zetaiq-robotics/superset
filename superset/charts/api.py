@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: chart PUT refuses a stale If-Match (412); lock race -> 409.
 # pylint: disable=too-many-lines
 import logging
 from contextvars import ContextVar

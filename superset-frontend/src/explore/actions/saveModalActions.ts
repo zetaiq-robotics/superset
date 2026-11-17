@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a chart save sends If-Match; a 412 is a StaleSaveError with what changed.
  */
 import rison from 'rison';
 import { Dispatch } from 'redux';

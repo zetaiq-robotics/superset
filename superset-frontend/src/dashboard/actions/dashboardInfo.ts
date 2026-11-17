@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: version-tracking actions; a metadata save sends If-Match and retries once on a 412.
  */
 import { Dispatch } from 'redux';
 import { t } from '@apache-superset/core/translation';

@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: tests for the dashboard stale-save guard, version pairs and ETag.
 
 from typing import Any
 from unittest.mock import MagicMock, patch

@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: tests for the removed certification fields.
+ * Modified by ZetaIQ: tests for the stale-save guard on the properties save.
  */
 
 import {

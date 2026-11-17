@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: an update keeps the chart version its edits started from.
 import logging
 from abc import ABC
 from typing import Optional

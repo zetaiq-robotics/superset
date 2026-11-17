@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the tab's base version is seeded from the GET ETag.
  */
 /* eslint-disable camelcase */
 import { DataMaskStateWithId, JsonObject } from '@superset-ui/core';
