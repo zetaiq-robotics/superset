@@ -340,6 +340,40 @@ def command_lost_lock_race(ex: BaseException) -> bool:
     return is_conditional_write() and is_lock_contention_error(ex.__cause__)
 
 
+def read_version_for_write(
+    api: Any,
+    model_cls: type[Model],
+    pk: Any,
+    *,
+    noun: str,
+    locked: bool,
+    lock: Callable[..., Any] = lock_entity_for_update,
+    read_version: Callable[..., EntityVersionInfo] = current_entity_version_info,
+) -> Response | EntityVersionInfo:
+    """Read the live version an entity write is about to replace.
+
+    With ``locked`` the entity row lock is taken first and the version is
+    read under it (steps 1 and 2 of :func:`guard_conditional_write`), so no
+    other save can land between this read and the caller's command. A lock
+    race lost at either point is the retryable 409 response; any other
+    database error re-raises. The locked entity rides on the returned info:
+    the caller must keep that info alive until its command has run.
+    """
+    locked_entity: Any = None
+    try:
+        if locked:
+            locked_entity = lock(model_cls, pk)
+        info: EntityVersionInfo = read_version(
+            model_cls, pk, lock_for_stale_check=locked
+        )
+    except OperationalError as ex:
+        if not (locked and is_lock_contention_error(ex)):
+            raise
+        return lock_contention_response(api, noun)
+    info.locked_entity = locked_entity
+    return info
+
+
 def guard_conditional_write(
     api: Any,
     model_cls: type[Model],
@@ -384,19 +418,17 @@ def guard_conditional_write(
     functions. Endpoints pass the names they import, so a test that patches
     them on the endpoint module still intercepts the guard's calls.
     """
-    conditional: bool = is_conditional_write()
-    locked_entity: Any = None
-    try:
-        if conditional:
-            locked_entity = lock(model_cls, pk)
-        info: EntityVersionInfo = read_version(
-            model_cls, pk, lock_for_stale_check=conditional
-        )
-    except OperationalError as ex:
-        if not (conditional and is_lock_contention_error(ex)):
-            raise
-        return lock_contention_response(api, noun)
-    info.locked_entity = locked_entity
+    info = read_version_for_write(
+        api,
+        model_cls,
+        pk,
+        noun=noun,
+        locked=is_conditional_write(),
+        lock=lock,
+        read_version=read_version,
+    )
+    if not isinstance(info, EntityVersionInfo):
+        return info
 
     token: str | None = concurrency_token_from(info)
     try:

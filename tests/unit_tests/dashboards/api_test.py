@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_mock import MockerFixture
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm.session import Session
 
 from superset import db, security_manager
@@ -320,3 +321,157 @@ def test_put_dashboard_without_if_match_still_saves(
     # new_info read passes none.
     assert version_info.call_args_list[0].kwargs["lock_for_stale_check"] is False
     assert _stored_title(dashboard_id) == "plain save"
+
+
+def _put_single_field(
+    mocker: MockerFixture, client: Any, route: str, body: dict[str, Any]
+) -> tuple[Any, Any]:
+    """Run a single-field dashboard write against a before/after live version."""
+    from superset.models.dashboard import Dashboard
+    from superset.versioning.api_helpers import EntityVersionInfo
+
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    version_info.side_effect = [
+        EntityVersionInfo(
+            version=1,
+            transaction_id=2,
+            version_uuid="before",
+            entity_uuid=dashboard.uuid,
+        ),
+        EntityVersionInfo(
+            version=2,
+            transaction_id=3,
+            version_uuid="after",
+            entity_uuid=dashboard.uuid,
+        ),
+    ]
+    lock = mocker.patch("superset.dashboards.api.lock_entity_for_update")
+    order = MagicMock()
+    order.attach_mock(lock, "lock")
+    order.attach_mock(version_info, "read")
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard.id}/{route}",
+        json=body,
+        # Reporting only: a stale If-Match must not stop these writes.
+        headers={"If-Match": '"stale"'},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    # Before the command: row lock first, then the version read under it.
+    assert [name for name, _, _ in order.mock_calls[:2]] == ["lock", "read"]
+    assert lock.call_args.args[0] is Dashboard
+    assert version_info.call_args_list[0].kwargs["lock_for_stale_check"] is True
+    # After the command: the live version, looked up without a lock. The
+    # route's pk arrives as a string; the lookup coerces it.
+    after = version_info.call_args_list[1]
+    assert after.args[0] is Dashboard
+    assert int(after.args[1]) == dashboard.id
+    assert after.args[2] == dashboard.uuid
+    assert not after.kwargs.get("lock_for_stale_check")
+    body = response.json
+    assert body["old_version_uuid"] == "before"
+    assert body["new_version_uuid"] == "after"
+    assert body["old_version_uuid"] != body["new_version_uuid"]
+    assert response.headers["ETag"] == f'"{body["new_version_uuid"]}"'
+    return response, dashboard
+
+
+def test_put_filters_returns_version_pair(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A native filter save reports the version it replaced and the new one."""
+    _put_single_field(
+        mocker,
+        client,
+        "filters",
+        {"modified": [{"id": "NATIVE_FILTER-1", "name": "region"}]},
+    )
+
+
+def test_put_chart_customizations_returns_version_pair(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A chart customization save reports the version it replaced and the new one."""
+    _put_single_field(
+        mocker,
+        client,
+        "chart_customizations",
+        {"modified": [{"id": "CHART_CUSTOMIZATION-1", "name": "group"}]},
+    )
+
+
+def test_put_colors_returns_version_pair(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A colour save reports the version it replaced and the new one."""
+    _, dashboard = _put_single_field(
+        mocker, client, "colors", {"color_scheme": "blueToGreen"}
+    )
+    db.session.expire_all()
+    assert json.loads(dashboard.json_metadata)["color_scheme"] == "blueToGreen"
+
+
+def _contention() -> OperationalError:
+    return OperationalError("SELECT", None, Exception(1213, "Deadlock found"))
+
+
+@pytest.mark.parametrize("lock_point", ["lock", "read"])
+def test_put_filters_lock_contention_is_retryable_409(
+    lock_point: str,
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A lost lock race before a small write is the retryable 409; no write."""
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    lock = mocker.patch("superset.dashboards.api.lock_entity_for_update")
+    {"lock": lock, "read": version_info}[lock_point].side_effect = _contention()
+    command = mocker.patch(
+        "superset.dashboards.api.UpdateDashboardNativeFiltersCommand"
+    )
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard.id}/filters",
+        json={"modified": [{"id": "NATIVE_FILTER-1", "name": "region"}]},
+    )
+
+    assert response.status_code == 409, response.get_data(as_text=True)
+    command.assert_not_called()
+
+
+def test_put_filters_command_lock_contention_is_retryable_409(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A lock race lost inside the command maps to the same 409, not a 422."""
+    from superset.commands.dashboard.exceptions import (
+        DashboardNativeFiltersUpdateFailedError,
+    )
+
+    dashboard, _ = _store_titled_dashboard(mocker)
+    mocker.patch("superset.dashboards.api.lock_entity_for_update")
+    failed = DashboardNativeFiltersUpdateFailedError()
+    failed.__cause__ = _contention()
+    mocker.patch(
+        "superset.dashboards.api.UpdateDashboardNativeFiltersCommand"
+    ).return_value.run.side_effect = failed
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard.id}/filters",
+        json={"modified": [{"id": "NATIVE_FILTER-1", "name": "region"}]},
+    )
+
+    assert response.status_code == 409, response.get_data(as_text=True)
