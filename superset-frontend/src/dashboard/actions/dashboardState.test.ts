@@ -66,6 +66,7 @@ import {
 import { emptyFilters } from 'spec/fixtures/mockDashboardFilters';
 import mockDashboardData from 'spec/fixtures/mockDashboardData';
 import { navigateTo, navigateWithState } from 'src/utils/navigationUtils';
+import { armUnsavedChangesPrompt } from 'src/dashboard/util/unsavedChangesPrompt';
 
 jest.mock('@superset-ui/core', () => ({
   ...jest.requireActual('@superset-ui/core'),
@@ -1236,6 +1237,7 @@ function stubWrites(replaced: string, created: string, result: unknown = []) {
     .spyOn(SupersetClient, 'get')
     .mockResolvedValue({ json: { result: [] } } as any);
   return {
+    request,
     put,
     get,
     restore: () => [request, put, get].forEach(s => s.mockRestore()),
@@ -1413,4 +1415,45 @@ test('a refused colour sync is logged, never an unhandled rejection', async () =
   expect(logged).toHaveBeenCalled();
   put.mockRestore();
   logged.mockRestore();
+});
+
+// A pending "Leave site?" prompt: dispatch the event the browser would.
+const leavePromptArmed = () => {
+  const event = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+};
+
+test('Save as a copy writes nothing to the original dashboard and leaves without a prompt', async () => {
+  const stubs = stubWrites('a', 'b');
+  const post = jest.spyOn(SupersetClient, 'post').mockResolvedValue({
+    json: { result: { id: 2, last_modified_time: 1 } },
+  } as any);
+  // the original moved on ('c'): any write to it now would be refused
+  const { dispatch, getState } = liveStore({ base: 'a', latest: 'c' });
+  armUnsavedChangesPrompt(true);
+  let armedAtNavigation: boolean | undefined;
+  mockNavigateTo.mockImplementationOnce(() => {
+    armedAtNavigation = leavePromptArmed();
+  });
+
+  await saveDashboardRequest(
+    mockDashboardData,
+    1,
+    SAVE_TYPE_NEWDASHBOARD,
+  )(dispatch, getState);
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  expect(post.mock.calls[0][0].endpoint).toBe('/api/v1/dashboard/1/copy/');
+  expect(stubs.put).not.toHaveBeenCalled();
+  expect(stubs.request).not.toHaveBeenCalled();
+  expect(mockNavigateTo).toHaveBeenCalledWith('/dashboard/2/');
+  expect(armedAtNavigation).toBe(false);
+  // the copy carries its own cross-filter configuration
+  expect(
+    JSON.parse(post.mock.calls[0][0].jsonPayload.json_metadata),
+  ).toHaveProperty('chart_configuration');
+  armUnsavedChangesPrompt(false);
+  post.mockRestore();
+  stubs.restore();
 });

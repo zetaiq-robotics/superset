@@ -24,6 +24,13 @@ import {
   VersionEntry,
 } from './changeSummary';
 
+// the person who got the 412
+jest.mock('src/utils/getBootstrapData', () => ({
+  ...jest.requireActual('src/utils/getBootstrapData'),
+  __esModule: true,
+  default: () => ({ user: { userId: 7 } }),
+}));
+
 const version = (
   uuid: string,
   name: string,
@@ -145,6 +152,60 @@ test('the first line never names a version that changed nothing', async () => {
 
   expect(summary?.changedBy).toBe('Priya');
   expect(summary?.lines).toEqual(['Priya changed: CSS']);
+  get.mockRestore();
+});
+
+const by = (v: VersionEntry, id: number): VersionEntry => ({
+  ...v,
+  changed_by: { ...v.changed_by, id },
+});
+
+test('the first line names the newest other author, not the person refused', async () => {
+  const get = jest.spyOn(SupersetClient, 'get').mockResolvedValue({
+    json: {
+      result: [
+        by(version('v1', 'Lee', [['css']]), 3),
+        by(version('v2', 'Priya', [['dashboard_title']]), 5),
+        // the refused person's own small save after their base
+        by(
+          version('v3', 'Ana', [
+            ['json_metadata', 'native_filter_configuration'],
+          ]),
+          7,
+        ),
+      ],
+    },
+  } as any);
+
+  const summary = await loadStaleSummary(
+    'dashboard',
+    'u',
+    'v0',
+    async () => null,
+  );
+
+  expect(summary?.changedBy).toBe('Priya');
+  expect(summary?.lines).toEqual([
+    'Lee changed: CSS',
+    'Priya changed: title',
+    'Ana changed: 1 filter',
+  ]);
+  get.mockRestore();
+});
+
+test('only own saves since the base: the first line keeps the newest one', async () => {
+  const get = jest.spyOn(SupersetClient, 'get').mockResolvedValue({
+    json: { result: [by(version('v1', 'Ana', [['css']]), 7)] },
+  } as any);
+
+  const summary = await loadStaleSummary(
+    'dashboard',
+    'u',
+    'v0',
+    async () => null,
+  );
+
+  expect(summary?.changedBy).toBe('Ana');
   get.mockRestore();
 });
 

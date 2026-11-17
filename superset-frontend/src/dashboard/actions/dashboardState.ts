@@ -78,10 +78,10 @@ import {
   fetchEtag,
   loadStaleSummary,
 } from 'src/dashboard/live/changeSummary';
+import { armUnsavedChangesPrompt } from 'src/dashboard/util/unsavedChangesPrompt';
 import {
   adoptOwnWrite,
   setDashboardVersions,
-  saveChartConfiguration,
   dashboardInfoChanged,
   SAVE_CHART_CONFIG_COMPLETE,
 } from './dashboardInfo';
@@ -598,15 +598,12 @@ export function saveDashboardRequest(
       if (lastModifiedTime) {
         dispatch(saveDashboardRequestSuccess(lastModifiedTime));
       }
-      const { chartConfiguration, globalChartConfiguration } =
-        handleChartConfiguration();
-      dispatch(
-        saveChartConfiguration({
-          chartConfiguration,
-          globalChartConfiguration,
-        }),
-      );
+      // The cross-filter configuration went in the copy's own body: a
+      // saveChartConfiguration here would PUT this tab's dashboard (the
+      // original, which the person chose not to overwrite).
       dispatch(saveDashboardFinished());
+      // the edits are saved (in the copy): no "Leave site?" on the way there
+      armUnsavedChangesPrompt(false);
       navigateTo(`/dashboard/${(response.json as JsonObject).result?.id}/`);
       dispatch(addSuccessToast(t('This dashboard was saved successfully.')));
       return response;
@@ -820,11 +817,17 @@ export function saveDashboardRequest(
     (cleanedData.metadata as JsonObject).default_filters =
       safeStringify(serializedFilters);
     (cleanedData.metadata as JsonObject).filter_scopes = serializedFilterScopes;
+    const { chartConfiguration, globalChartConfiguration } =
+      handleChartConfiguration();
     const copyPayload = {
       dashboard_title: cleanedData.dashboard_title,
       css: cleanedData.css,
       duplicate_slices: cleanedData.duplicate_slices,
-      json_metadata: JSON.stringify(cleanedData.metadata),
+      json_metadata: JSON.stringify({
+        ...cleanedData.metadata,
+        chart_configuration: chartConfiguration,
+        global_chart_configuration: globalChartConfiguration,
+      }),
     };
 
     return SupersetClient.post({

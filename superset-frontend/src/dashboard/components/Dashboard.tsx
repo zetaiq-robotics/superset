@@ -16,10 +16,10 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: a native filter re-runs only the charts it can affect.
+ * Modified by ZetaIQ: a native filter re-runs only the charts it can affect;
+ * the unsaved-changes prompt lives in util/unsavedChangesPrompt.
  */
 import { ReactNode, useCallback, useContext, useEffect, useRef } from 'react';
-import { t } from '@apache-superset/core/translation';
 import { JsonObject } from '@superset-ui/core';
 
 import { Loading } from '@superset-ui/core/components';
@@ -46,6 +46,7 @@ import { areObjectsEqual } from '../../reduxUtils';
 
 import getLocationHash from '../util/getLocationHash';
 import isDashboardEmpty from '../util/isDashboardEmpty';
+import { armUnsavedChangesPrompt } from '../util/unsavedChangesPrompt';
 import type {
   AppliedCrossFilterType,
   AppliedNativeFilterType,
@@ -91,21 +92,6 @@ export interface DashboardProps {
 interface VisibilityEventData {
   start_offset: number;
   ts: number;
-}
-
-function unload(event: BeforeUnloadEvent): string {
-  const message = t('You have unsaved changes.');
-  // Set returnValue on the actual event object to trigger the browser prompt
-  event.returnValue = message;
-  return message; // Gecko + Webkit, Safari, Chrome etc.
-}
-
-function onBeforeUnload(hasChanged: boolean): void {
-  if (hasChanged) {
-    window.addEventListener('beforeunload', unload);
-  } else {
-    window.removeEventListener('beforeunload', unload);
-  }
 }
 
 function Dashboard({
@@ -262,11 +248,7 @@ function Dashboard({
       applyFilters();
     }
 
-    if (hasUnsavedChanges) {
-      onBeforeUnload(true);
-    } else {
-      onBeforeUnload(false);
-    }
+    armUnsavedChangesPrompt(!!hasUnsavedChanges);
   }, [
     chartConfiguration,
     editMode,
@@ -333,7 +315,7 @@ function Dashboard({
     // componentWillUnmount equivalent
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      onBeforeUnload(false); // Remove beforeunload listener on unmount
+      armUnsavedChangesPrompt(false); // Remove beforeunload listener on unmount
       actionsRef.current.clearDataMaskState();
       actionsRef.current.clearAllChartStates();
     };
