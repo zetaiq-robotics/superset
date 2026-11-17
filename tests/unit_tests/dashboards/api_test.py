@@ -475,3 +475,143 @@ def test_put_filters_command_lock_contention_is_retryable_409(
     )
 
     assert response.status_code == 409, response.get_data(as_text=True)
+
+
+def _get_dashboard_etag(client: Any, dashboard_id: int, **headers: str) -> str:
+    response = client.get(f"/api/v1/dashboard/{dashboard_id}", headers=headers)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.headers["ETag"].strip('"')
+
+
+def test_dashboard_etag_changes_when_only_editors_change(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """An access-only change moves the GET tag; the version part stays put.
+
+    Editors and viewers live outside the versioned row, so a client holding
+    the old tag must still see it change, while ``If-Match`` (which compares
+    only the version part) keeps passing.
+    """
+    from superset.subjects.models import Subject
+    from superset.subjects.types import SubjectType
+
+    dashboard, _ = _store_titled_dashboard(mocker)
+    dashboard_id = dashboard.id
+    mocker.patch(
+        "superset.dashboards.api.entity_concurrency_token", return_value="live"
+    )
+    subject = Subject(label="editor", type=SubjectType.ROLE)
+    db.session.add(subject)
+    db.session.flush()
+
+    tag_a = _get_dashboard_etag(client, dashboard_id)
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard_id}", json={"editors": [subject.id]}
+    )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    db.session.expire_all()
+    tag_b = _get_dashboard_etag(client, dashboard_id)
+
+    assert tag_a != tag_b
+    assert tag_a.split(":")[0] == tag_b.split(":")[0] == "live"
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_if_match_with_access_suffix_still_matches(
+    compressed: bool,
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """The GET tag, with its access suffix (and any coding suffix), saves."""
+    dashboard, _ = _store_titled_dashboard(mocker)
+    dashboard_id = dashboard.id
+    mocker.patch(
+        "superset.dashboards.api.entity_concurrency_token", return_value="live"
+    )
+    if compressed:
+        tag = _get_dashboard_etag(client, dashboard_id, **{"Accept-Encoding": "zstd"})
+        # The compression layer appends the content coding to the tag.
+        assert tag.startswith("live:") and tag.endswith(":zstd")
+        assert tag.count(":") == 2
+    else:
+        tag = _get_dashboard_etag(client, dashboard_id)
+        assert tag.startswith("live:") and tag.count(":") == 1
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard_id}",
+        json={"dashboard_title": "after reading the tag"},
+        headers={"If-Match": f'"{tag}"'},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert _stored_title(dashboard_id) == "after reading the tag"
+
+
+def _unversioned(mocker: MockerFixture) -> None:
+    """Capture on, but the entity has no version rows yet."""
+    mocker.patch(
+        "superset.versioning.api_helpers._capture_enabled", return_value=True
+    )
+    mocker.patch(
+        "superset.versioning.api_helpers.VersionDAO.current_live_version_uuid",
+        return_value=None,
+    )
+
+
+def test_dashboard_get_etag_for_unversioned_dashboard_is_unversioned_token(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A never-versioned dashboard still hands out a validator to replay."""
+    from superset.versioning.api_helpers import unversioned_entity_token
+
+    dashboard, _ = _store_titled_dashboard(mocker)
+    _unversioned(mocker)
+
+    tag = _get_dashboard_etag(client, dashboard.id)
+
+    assert tag.split(":")[0] == unversioned_entity_token(dashboard.uuid)
+
+
+def test_small_write_on_unversioned_dashboard_reports_unversioned_token(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """The replaced version of a never-versioned dashboard is the GET's token."""
+    from superset.versioning.api_helpers import (
+        EntityVersionInfo,
+        unversioned_entity_token,
+    )
+
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    version_info.side_effect = [
+        EntityVersionInfo(entity_uuid=dashboard.uuid),
+        EntityVersionInfo(
+            version=1,
+            transaction_id=3,
+            version_uuid="after",
+            entity_uuid=dashboard.uuid,
+        ),
+    ]
+    mocker.patch("superset.dashboards.api.lock_entity_for_update")
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard.id}/colors",
+        json={"color_scheme": "blueToGreen"},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.json["old_version_uuid"] == unversioned_entity_token(
+        dashboard.uuid
+    )
+    assert response.json["new_version_uuid"] == "after"
+    assert response.headers["ETag"] == '"after"'
