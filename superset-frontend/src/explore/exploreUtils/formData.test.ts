@@ -100,3 +100,18 @@ test('postFormData without optional params should work', async () => {
     },
   });
 });
+
+test('the tab base version travels with the form data on create and update', async () => {
+  (SupersetClient.post as jest.Mock).mockResolvedValue({ json: { key: 'k' } });
+  (SupersetClient.put as jest.Mock).mockResolvedValue({ json: { key: 'k' } });
+
+  await postFormData(1, 'table', { a: 1 }, 42, 'tab-7', 'v-base');
+  await putFormData(1, 'table', 'k', { a: 2 }, 42, 'tab-7', 'v-base');
+
+  expect(
+    (SupersetClient.post as jest.Mock).mock.calls.pop()[0].jsonPayload,
+  ).toMatchObject({ version_uuid: 'v-base' });
+  expect(
+    (SupersetClient.put as jest.Mock).mock.calls.pop()[0].jsonPayload,
+  ).toMatchObject({ version_uuid: 'v-base' });
+});

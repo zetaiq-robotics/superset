@@ -574,6 +574,8 @@ const SaveModal = ({
           if (isNewDashboard()) {
             const response = await actions.createDashboard(dashboard.label);
             validId = response.id;
+            // it exists now: a retry (after a refused overwrite) reuses it
+            setDashboard({ label: dashboard.label, value: validId });
           }
 
           try {

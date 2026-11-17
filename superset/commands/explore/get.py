@@ -28,6 +28,7 @@ from superset.commands.explore.form_data.get import GetFormDataCommand
 from superset.commands.explore.form_data.parameters import (
     CommandParameters as FormDataCommandParameters,
 )
+from superset.commands.explore.form_data.state import TemporaryExploreState
 from superset.commands.explore.parameters import CommandParameters
 from superset.commands.explore.permalink.get import GetExplorePermalinkCommand
 from superset.connectors.sqla.models import BaseDatasource, SqlaTable
@@ -108,6 +109,7 @@ class GetExploreCommand(BaseCommand, ABC):
     def run(self) -> Optional[dict[str, Any]]:  # noqa: C901
         initial_form_data = {}
         permalink_chart_state = None
+        cached: Optional[TemporaryExploreState] = None
         if self._permalink_key is not None:
             command = GetExplorePermalinkCommand(self._permalink_key)
             permalink_value = command.run()
@@ -121,8 +123,10 @@ class GetExploreCommand(BaseCommand, ABC):
             permalink_chart_state = state.get("chartState")
         elif self._form_data_key:
             parameters = FormDataCommandParameters(key=self._form_data_key)
-            value = GetFormDataCommand(parameters).run()
+            form_data_command = GetFormDataCommand(parameters)
+            value = form_data_command.run()
             initial_form_data = json.loads(value) if value else {}
+            cached = form_data_command.state
 
         message = None
 
@@ -244,10 +248,19 @@ class GetExploreCommand(BaseCommand, ABC):
             # pylint: disable=import-outside-toplevel
             from superset.models.slice import Slice
 
-            # The base token a later chart save replays as ``If-Match``.
+            # The base token a later chart save replays as ``If-Match``. Form
+            # data restored from the cache keeps the version it started from:
+            # the live one may already carry someone else's later save.
+            # Entries written before the version was stored fall back to live.
+            restored = (
+                cached.get("version_uuid")
+                if cached and cached.get("chart_id") == slc.id
+                else None
+            )
             slice_data = {
                 **slc.data,
-                "version_uuid": entity_concurrency_token(Slice, slc.id, slc.uuid),
+                "version_uuid": restored
+                or entity_concurrency_token(Slice, slc.id, slc.uuid),
             }
 
         result: dict[str, Any] = {

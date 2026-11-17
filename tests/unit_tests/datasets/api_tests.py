@@ -24,7 +24,7 @@ from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.orm.session import Session
 from werkzeug.test import TestResponse
 
-from superset import db
+from superset import db, security_manager
 from superset.commands.dataset.exceptions import DatasetUpdateFailedError
 from superset.utils import json
 from superset.versioning.api_helpers import EntityVersionInfo
@@ -469,15 +469,19 @@ def test_put_dataset_rejects_stale_if_match(
 
     dataset = _create_dataset("test_put_stale_if_match")
 
-    with patch(
-        "superset.datasets.api.current_entity_version_info",
-        return_value=EntityVersionInfo(
-            version=1,
-            transaction_id=2,
-            version_uuid="new",
-            entity_uuid=dataset.uuid,
-        ),
-    ) as version_info:
+    with (
+        patch(
+            "superset.datasets.api.current_entity_version_info",
+            return_value=EntityVersionInfo(
+                version=1,
+                transaction_id=2,
+                version_uuid="new",
+                entity_uuid=dataset.uuid,
+            ),
+        ) as version_info,
+        # an editor: only editors are told the dataset moved
+        patch.object(security_manager, "raise_for_editorship"),
+    ):
         response = client.put(
             f"/api/v1/dataset/{dataset.id}",
             json={"description": "from a stale tab"},
@@ -710,15 +714,19 @@ def test_put_dataset_guards_a_dataset_with_no_version_rows(
     dataset = _create_dataset("test_put_unversioned_guard")
     entity_uuid = dataset.uuid
 
-    with patch(
-        "superset.datasets.api.current_entity_version_info",
-        # A dataset that has since been versioned by another tab's save.
-        return_value=EntityVersionInfo(
-            version=0,
-            transaction_id=1,
-            version_uuid="written-by-the-other-tab",
-            entity_uuid=entity_uuid,
+    with (
+        patch(
+            "superset.datasets.api.current_entity_version_info",
+            # A dataset that has since been versioned by another tab's save.
+            return_value=EntityVersionInfo(
+                version=0,
+                transaction_id=1,
+                version_uuid="written-by-the-other-tab",
+                entity_uuid=entity_uuid,
+            ),
         ),
+        # an editor: only editors are told the dataset moved
+        patch.object(security_manager, "raise_for_editorship"),
     ):
         response = client.put(
             f"/api/v1/dataset/{dataset.id}",

@@ -16,7 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { summariseChanges, VersionEntry } from './changeSummary';
+import { SupersetClient } from '@superset-ui/core';
+import {
+  fetchEtag,
+  loadStaleSummary,
+  summariseChanges,
+  VersionEntry,
+} from './changeSummary';
 
 const version = (
   uuid: string,
@@ -105,4 +111,46 @@ test('chart paths', () => {
       'v0',
     ),
   ).toEqual(['Priya changed: title, chart settings, dataset']);
+});
+
+test('a baseline or an empty version names no author (base predating the history)', () => {
+  const versions: VersionEntry[] = [
+    { ...version('v0', 'Lee', []), operation_type: 'baseline' },
+    { ...version('v1', 'Ana', [['css']]), operation_type: 'baseline' },
+    version('v2', 'Sam', []),
+    version('v3', 'Priya', [['dashboard_title']]),
+  ];
+
+  expect(summariseChanges(versions, 'unversioned')).toEqual([
+    'Priya changed: title',
+  ]);
+});
+
+test('the first line never names a version that changed nothing', async () => {
+  const get = jest.spyOn(SupersetClient, 'get').mockResolvedValue({
+    json: {
+      result: [
+        version('v1', 'Priya', [['css']]),
+        { ...version('v2', 'Lee', []), operation_type: 'baseline' },
+      ],
+    },
+  } as any);
+
+  const summary = await loadStaleSummary('dashboard', 'u', 'v0', async () =>
+    null,
+  );
+
+  expect(summary?.changedBy).toBe('Priya');
+  expect(summary?.lines).toEqual(['Priya changed: CSS']);
+  get.mockRestore();
+});
+
+test('fetchEtag rejects when the fresh read carries no ETag', async () => {
+  const get = jest.spyOn(SupersetClient, 'get').mockResolvedValue({
+    json: {},
+    response: new Response('{}'),
+  } as any);
+
+  await expect(fetchEtag('/api/v1/chart/1')).rejects.toThrow();
+  get.mockRestore();
 });

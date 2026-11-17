@@ -264,7 +264,10 @@ export function savePublished(
   ): Promise<void> {
     return SupersetClient.put({
       endpoint: `/api/v1/dashboard/${id}`,
-      headers: { 'Content-Type': 'application/json' },
+      // `*` matches any version, so the toggle is never refused, but makes
+      // the server lock the row before reading the version it replaces: no
+      // other save can land in between and be skipped by the adoption below
+      headers: { 'Content-Type': 'application/json', 'If-Match': '*' },
       body: JSON.stringify({
         published: isPublished,
       }),
@@ -714,10 +717,8 @@ export function saveDashboardRequest(
             // saved now (still guarded: a save landing in between answers
             // 412 again). The base moves only if the PUT succeeds.
             const etag = await fetchEtag(`/api/v1/dashboard/${id}`);
-            if (etag) {
-              const known = getState().dashboardInfo?.versions ?? NO_VERSIONS;
-              dispatch(setDashboardVersions(id, noteNewer(known, etag)));
-            }
+            const known = getState().dashboardInfo?.versions ?? NO_VERSIONS;
+            dispatch(setDashboardVersions(id, noteNewer(known, etag)));
             sent = versionOf(etag);
           }
           const response = await SupersetClient.put({
@@ -1350,9 +1351,10 @@ export const persistDashboardLabelsColor =
     if (labelsColorMapMustSync || sharedLabelsColorsMustSync) {
       dispatch(setDashboardLabelsColorMapSynced());
       dispatch(setDashboardSharedLabelsColorsSynced());
-      storeDashboardColorConfig(id, metadata).then(({ json }) =>
-        dispatch(adoptOwnWrite(id, json)),
-      );
+      storeDashboardColorConfig(id, metadata)
+        .then(({ json }) => dispatch(adoptOwnWrite(id, json)))
+        // a background write: nothing for the person to act on
+        .catch(error => logging.warn('Dashboard colour sync failed', error));
     }
   };
 

@@ -25,6 +25,7 @@ import {
   useState,
   useCallback,
   useEffect,
+  useRef,
 } from 'react';
 
 import {
@@ -44,8 +45,17 @@ import {
 } from '@superset-ui/core';
 import Chart, { Slice } from 'src/types/Chart';
 import { useAppDispatch } from 'src/views/store';
-import { saveSliceSuccess } from 'src/explore/actions/saveModalActions';
-import { adoptAfterOwnWrite } from 'src/dashboard/live/versionTracker';
+import {
+  chartChangesSince,
+  saveSliceSuccess,
+} from 'src/explore/actions/saveModalActions';
+import {
+  adoptAfterOwnWrite,
+  ifMatch,
+  versionOf,
+} from 'src/dashboard/live/versionTracker';
+import { fetchEtag, StaleSummary } from 'src/dashboard/live/changeSummary';
+import { StaleSaveModal } from 'src/dashboard/components/StaleSaveModal';
 import withToasts from 'src/components/MessageToasts/withToasts';
 import { type TagType } from 'src/components';
 import { TagTypeEnum } from 'src/components/Tag/TagType';
@@ -106,6 +116,13 @@ function PropertiesModal({
     SubjectPickerValue[] | null
   >(null);
   const [tags, setTags] = useState<TagType[]>([]);
+  // ETag of the chart as this modal loaded it; its save is checked against it
+  const loadedEtag = useRef<string | null>(null);
+  // a save refused because someone else saved first; `overwrite` resends it
+  const [stale, setStale] = useState<{
+    summary: StaleSummary;
+    overwrite: () => void;
+  } | null>(null);
 
   const chartId = slice.slice_id;
   const extraFields = useMemo(
@@ -212,6 +229,7 @@ function PropertiesModal({
         const response = await SupersetClient.get({
           endpoint: `/api/v1/chart/${slice.slice_id}?q=${queryParams}`,
         });
+        loadedEtag.current = response.response?.headers?.get('ETag') ?? null;
         const chart = response.json.result;
         if (isFeatureEnabled(FeatureFlag.TaggingSystem)) {
           const customTags = chart.tags?.filter(
@@ -256,13 +274,21 @@ function PropertiesModal({
       payload.viewers = selectedViewers.map(v => v.value);
     }
 
-    try {
-      const chartEndpoint = `/api/v1/chart/${slice.slice_id}`;
+    const chartEndpoint = `/api/v1/chart/${slice.slice_id}`;
+    const fail = async (res: unknown) =>
+      showError(await getClientErrorObject(res as Response));
+    // `etag`: the loaded version, or for an Overwrite the version saved now
+    const put = async (etag: string | null) => {
       const { json: written } = await SupersetClient.put({
         endpoint: chartEndpoint,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...ifMatch(versionOf(etag)),
+        },
         body: JSON.stringify(payload),
       });
+      // only a save that landed moves this modal's version
+      loadedEtag.current = written.new_version_uuid ?? null;
       dispatch(saveSliceSuccess({ id: slice.slice_id }));
       const res = await SupersetClient.get({
         endpoint: chartEndpoint,
@@ -277,9 +303,26 @@ function PropertiesModal({
       onSave({ ...res.json.result, version_uuid: base });
       addSuccessToast(t('Chart properties updated'));
       onHide();
+    };
+
+    try {
+      await put(loadedEtag.current);
     } catch (res) {
-      const clientError = await getClientErrorObject(res);
-      showError(clientError);
+      if ((res as Response)?.status === 412) {
+        setStale({
+          summary: await chartChangesSince(
+            slice.slice_id,
+            versionOf(loadedEtag.current),
+          ),
+          // resend once against the version saved now (still guarded)
+          overwrite: () =>
+            fetchEtag(chartEndpoint)
+              .then(etag => put(etag))
+              .catch(fail),
+        });
+      } else {
+        await fail(res);
+      }
     }
     setSubmitting(false);
   };
@@ -486,6 +529,21 @@ function PropertiesModal({
           // ZetaIQ: the "Advanced" (certification) section is removed (polish round, 2026-10-30).
         ]}
       />
+      {stale && (
+        <StaleSaveModal
+          title={t('This chart was changed after you opened it')}
+          summary={stale.summary}
+          onHide={() => setStale(null)}
+          onDiscard={() => {
+            setStale(null);
+            onHide();
+          }}
+          onOverwrite={() => {
+            setStale(null);
+            stale.overwrite();
+          }}
+        />
+      )}
     </StandardModal>
   );
 }

@@ -192,3 +192,42 @@ def test_put_chart_on_unversioned_chart_reports_unversioned_token(
     assert response.json["old_version_uuid"] == unversioned_entity_token(chart.uuid)
     assert response.json["new_version_uuid"] == "after"
     assert response.headers["ETag"] == '"after"'
+
+
+@pytest.mark.parametrize("case", ["not an editor", "missing"])
+def test_put_chart_stale_if_match_without_edit_access_answers_as_without_it(
+    case: str,
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """A caller who cannot edit the chart gets the command's 403/404, never 412.
+
+    Answering 412 (with the live ETag) first would tell anyone with the
+    generic write permission that the chart exists and moved.
+    """
+    from unittest.mock import MagicMock
+
+    from superset.exceptions import SupersetSecurityException
+
+    chart, _ = _store_chart(mocker)
+    # The guard rolls back to release its lock; keep the chart past that.
+    db.session.commit()
+    mocker.patch.object(
+        security_manager,
+        "raise_for_editorship",
+        side_effect=SupersetSecurityException(MagicMock()),
+    )
+    chart_id = chart.id if case == "not an editor" else chart.id + 1000
+    expected = 403 if case == "not an editor" else 404
+
+    plain = client.put(f"/api/v1/chart/{chart_id}", json={"slice_name": "x"})
+    stale = client.put(
+        f"/api/v1/chart/{chart_id}",
+        json={"slice_name": "x"},
+        headers={"If-Match": '"old"'},
+    )
+
+    assert plain.status_code == stale.status_code == expected
+    assert "ETag" not in stale.headers

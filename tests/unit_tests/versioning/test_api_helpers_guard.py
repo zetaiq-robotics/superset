@@ -25,8 +25,13 @@ from flask import Flask, Response
 from pytest_mock import MockerFixture
 from sqlalchemy.exc import OperationalError
 
+from superset.exceptions import SupersetSecurityException
 from superset.utils import json
-from superset.versioning.api_helpers import EntityVersionInfo, guard_conditional_write
+from superset.versioning.api_helpers import (
+    EntityVersionInfo,
+    guard_conditional_write,
+    lock_entity_for_update,
+)
 
 STALE_MESSAGE = "The thing was changed by another user."
 
@@ -91,8 +96,13 @@ def test_current_if_match_returns_info_holding_the_locked_entity(
     assert read_version.call_args.kwargs["lock_for_stale_check"] is True
 
 
-def test_stale_if_match_is_412_with_live_etag(app: Flask) -> None:
+def test_stale_if_match_is_412_with_live_etag(
+    app: Flask, mocker: MockerFixture
+) -> None:
     lock = MagicMock()
+    editorship = mocker.patch(
+        "superset.versioning.api_helpers.security_manager.raise_for_editorship"
+    )
 
     result = _guard(app, '"old"', lock=lock)
 
@@ -100,6 +110,7 @@ def test_stale_if_match_is_412_with_live_etag(app: Flask) -> None:
     assert result.headers["ETag"] == '"live"'
     assert result.json == {"message": STALE_MESSAGE}
     lock.assert_called_once()
+    editorship.assert_called_once_with(lock.return_value)
 
 
 @pytest.mark.parametrize("lock_point", ["lock", "read_version"])
@@ -131,3 +142,63 @@ def test_unrelated_or_unconditional_read_errors_propagate(
 
     with pytest.raises(OperationalError):
         _guard(app, if_match, read_version=MagicMock(side_effect=error))
+
+
+def test_star_if_match_takes_the_lock_and_locked_read_and_never_412(
+    app: Flask,
+) -> None:
+    """``If-Match: *`` (the published toggle) locks like any conditional save.
+
+    The version it reports as replaced is then read under the lock, so no
+    other save can land between that read and the write; ``*`` matches any
+    version, so it is never refused.
+    """
+    lock, read_version = MagicMock(), MagicMock(return_value=_live())
+
+    result = _guard(app, "*", lock=lock, read_version=read_version)
+
+    assert isinstance(result, EntityVersionInfo)
+    lock.assert_called_once()
+    assert result.locked_entity is lock.return_value
+    assert read_version.call_args.kwargs["lock_for_stale_check"] is True
+
+
+@pytest.mark.parametrize("entity", ["not an editor", "missing"])
+def test_stale_if_match_from_a_non_editor_is_left_to_the_command(
+    app: Flask, mocker: MockerFixture, entity: str
+) -> None:
+    """No 412 (nor the live ETag) for an entity the caller cannot edit.
+
+    The lock is released and the request goes on, so the update command
+    answers 403/404 exactly as it does without ``If-Match``.
+    """
+    db = mocker.patch("superset.versioning.api_helpers.db")
+    mocker.patch(
+        "superset.versioning.api_helpers.security_manager.raise_for_editorship",
+        side_effect=SupersetSecurityException(MagicMock()),
+    )
+    lock = MagicMock(return_value=None if entity == "missing" else MagicMock())
+
+    result = _guard(app, '"old"', lock=lock)
+
+    assert isinstance(result, EntityVersionInfo)
+    assert result.locked_entity is None
+    db.session.rollback.assert_called_once()
+
+
+def test_lock_is_for_no_key_update_on_postgres(mocker: MockerFixture) -> None:
+    """Postgres takes the row lock that does not block foreign-key checks."""
+    from sqlalchemy.dialects import postgresql
+
+    from superset.models.slice import Slice
+
+    seen: dict[str, Any] = {}
+
+    def one_or_none(query: Any) -> None:
+        seen["sql"] = str(query.statement.compile(dialect=postgresql.dialect()))
+
+    mocker.patch("sqlalchemy.orm.Query.one_or_none", one_or_none)
+
+    lock_entity_for_update(Slice, 1)
+
+    assert "FOR NO KEY UPDATE" in seen["sql"]

@@ -70,7 +70,8 @@ def test_lock_is_a_populating_locking_read(mocker: MockerFixture) -> None:
     # integration tests on real backends.
     populated.filter.assert_called_once()
     filtered = populated.filter.return_value
-    filtered.with_for_update.assert_called_once_with()
+    # key_share: FOR NO KEY UPDATE on Postgres (see lock_entity_for_update)
+    filtered.with_for_update.assert_called_once_with(key_share=True)
     filtered.with_for_update.return_value.one_or_none.assert_called_once_with()
     assert result is filtered.with_for_update.return_value.one_or_none.return_value
 

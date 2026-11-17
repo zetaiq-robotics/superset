@@ -615,3 +615,62 @@ def test_small_write_on_unversioned_dashboard_reports_unversioned_token(
     )
     assert response.json["new_version_uuid"] == "after"
     assert response.headers["ETag"] == '"after"'
+
+
+def test_small_write_whose_after_read_fails_still_answers_200(
+    session: Session,
+    client: Any,
+    full_api_access: None,
+    mocker: MockerFixture,
+) -> None:
+    """The write landed: a failed post-commit version read is not a 500.
+
+    No new version and no ETag, so the client keeps its base (at worst a
+    false 412 later, never a missed conflict).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from superset.versioning.api_helpers import EntityVersionInfo
+
+    dashboard, version_info = _store_titled_dashboard(mocker)
+    version_info.side_effect = [
+        EntityVersionInfo(
+            version=1,
+            transaction_id=2,
+            version_uuid="before",
+            entity_uuid=dashboard.uuid,
+        ),
+        SQLAlchemyError("connection lost"),
+    ]
+    mocker.patch("superset.dashboards.api.lock_entity_for_update")
+
+    response = client.put(
+        f"/api/v1/dashboard/{dashboard.id}/colors",
+        json={"color_scheme": "blueToGreen"},
+    )
+
+    assert response.status_code == 200, response.get_data(as_text=True)
+    assert response.json["old_version_uuid"] == "before"
+    assert response.json["new_version_uuid"] is None
+    assert "ETag" not in response.headers
+
+
+def test_dashboard_access_etag_is_per_user(mocker: MockerFixture) -> None:
+    """The GET body is filtered per user, so its tag must be too.
+
+    A browser cache keyed by URL must not answer user B's conditional GET
+    with 304 for the body it stored for user A. The version part (what
+    ``If-Match`` compares) does not change.
+    """
+    from superset.dashboards.api import dashboard_access_etag
+
+    dash = MagicMock(editors=[], viewers=[])
+    user = mocker.patch("superset.dashboards.api.get_user_id", return_value=1)
+    first = dashboard_access_etag(dash, "live")
+    again = dashboard_access_etag(dash, "live")
+    user.return_value = 2
+    other = dashboard_access_etag(dash, "live")
+
+    assert first == again
+    assert first != other
+    assert first.split(":")[0] == other.split(":")[0] == "live"

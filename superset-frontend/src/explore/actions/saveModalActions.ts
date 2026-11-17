@@ -246,7 +246,7 @@ const addToasts = (
 // Explore has the chart's id; the history is keyed by its uuid. One list
 // read gives the uuid and, for when the history fails, who saved last (the
 // single-chart GET carries no changed-by name).
-const chartChangesSince = async (
+export const chartChangesSince = async (
   sliceId: number,
   since: string | null | undefined,
 ): Promise<StaleSummary> => {
