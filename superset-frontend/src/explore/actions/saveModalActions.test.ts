@@ -17,6 +17,7 @@
  * under the License.
  */
 import fetchMock from 'fetch-mock';
+import { StaleSaveError } from 'src/dashboard/live/changeSummary';
 import { Dispatch } from 'redux';
 import { ADD_TOAST } from 'src/components/MessageToasts/actions';
 import {
@@ -1034,4 +1035,64 @@ test('overwrite of a chart with no version sends no If-Match', async () => {
 
   const request = fetchMock.callHistory.lastCall(updateSliceEndpoint);
   expect(new Headers(request?.options.headers).has('If-Match')).toBe(false);
+});
+
+const chartListEndpoint = 'glob:*/api/v1/chart/?q=*';
+const chartRow = {
+  uuid: 'chart-uuid',
+  changed_by_name: 'Priya Rao',
+  changed_on_utc: '2026-11-17T09:30:00.000000',
+};
+
+const refusedOverwrite = () =>
+  updateSlice(
+    { ...sliceResponsePayload, slice_id: sliceId, version_uuid: 'v1' } as never,
+    sliceName,
+    [],
+  )(jest.fn(), (() => ({ explore: { form_data: formData } })) as never).catch(
+    e => e as StaleSaveError,
+  );
+
+test('without the chart history, the first line comes from the chart list row', async () => {
+  fetchMock.put(updateSliceEndpoint, { status: 412, body: { message: 'x' } });
+  fetchMock.get(chartListEndpoint, { result: [chartRow] });
+  fetchMock.get('glob:*/api/v1/chart/chart-uuid/versions/', 500);
+
+  const error = await refusedOverwrite();
+
+  expect(error).toBeInstanceOf(StaleSaveError);
+  expect(error.summary?.changedBy).toBe('Priya Rao');
+  expect(error.summary?.lines).toEqual([]);
+  const q = fetchMock.callHistory.lastCall(chartListEndpoint)!.url;
+  expect(decodeURIComponent(q)).toContain(
+    'columns:!(uuid,changed_by_name,changed_on_utc)',
+  );
+});
+
+test('a refused overwrite reports what changed, from the chart history', async () => {
+  fetchMock.put(updateSliceEndpoint, { status: 412, body: { message: 'x' } });
+  fetchMock.get(chartListEndpoint, { result: [chartRow] });
+  fetchMock.get('glob:*/api/v1/chart/chart-uuid/versions/', {
+    result: [
+      { version_uuid: 'v1', changed_by: { first_name: 'Lee' }, changes: [] },
+      {
+        version_uuid: 'v2',
+        issued_at: '2026-11-17T10:00:00',
+        changed_by: { first_name: 'Priya' },
+        changes: [{ path: ['params', 'metrics'], operation: 'edit' }],
+      },
+    ],
+  });
+  const getState = () => ({ explore: { form_data: formData } });
+
+  const refused = updateSlice(
+    { ...sliceResponsePayload, slice_id: sliceId, version_uuid: 'v1' } as never,
+    sliceName,
+    [],
+  )(jest.fn(), getState as never);
+
+  await expect(refused).rejects.toBeInstanceOf(StaleSaveError);
+  const { summary } = (await refused.catch(e => e)) as StaleSaveError;
+  expect(summary?.changedBy).toBe('Priya');
+  expect(summary?.lines).toEqual(['Priya changed: chart settings']);
 });

@@ -143,3 +143,16 @@ test('useDashboard exposes the response ETag', async () => {
   expect(result.current.result?.dashboard_title).toBe('Test');
   fetchMock.clearHistory().removeRoutes();
 });
+
+test('useDashboard reports an error when a 200 body carries one', async () => {
+  fetchMock.get('glob:*/api/v1/dashboard/8?q=*', {
+    body: { error: 'Something went wrong' },
+    headers: { ETag: '"v1:abc"' },
+  });
+
+  const { result } = renderHook(() => useDashboard(8));
+
+  await waitFor(() => expect(result.current.status).toBe('error'));
+  expect(result.current.error?.message).toBe('Something went wrong');
+  fetchMock.clearHistory().removeRoutes();
+});

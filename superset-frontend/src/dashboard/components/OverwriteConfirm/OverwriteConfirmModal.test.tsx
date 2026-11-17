@@ -55,6 +55,11 @@ test('requests update dashboard api when save button is clicked', async () => {
 
   // mock fetch datasets
   fetchMock.get(fetchDatasetsEndpoint, []);
+  // a confirmed overwrite first reads the version saved now
+  fetchMock.get(updateDashboardEndpoint, {
+    body: { result: {} },
+    headers: { ETag: '"now:access"' },
+  });
 
   fetchMock.put(
     updateDashboardEndpoint,
@@ -88,7 +93,9 @@ test('requests update dashboard api when save button is clicked', async () => {
   fireEvent.click(saveButton);
   await waitFor(() =>
     expect(
-      fetchMock.callHistory.calls(updateDashboardEndpoint)?.[0]?.options?.body,
+      fetchMock.callHistory
+        .calls(updateDashboardEndpoint)
+        .find(c => c.options.method?.toUpperCase() === 'PUT')?.options?.body,
     ).toEqual(JSON.stringify(overwriteConfirmMetadata.data)),
   );
   await waitFor(() =>

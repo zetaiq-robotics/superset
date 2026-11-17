@@ -554,6 +554,100 @@ describe('PropertiesModal', () => {
     put.mockRestore();
   });
 
+  // The dashboard GET answers v26 first, then v27 saved by Priya. The PUTs
+  // are refused with `refusals` in order, then succeed.
+  const staleProperties = async (refusals: number[] = [412]) => {
+    const { get } = SupersetCore.SupersetClient;
+    let reads = 0;
+    const getSpy = jest
+      .spyOn(SupersetCore.SupersetClient, 'get')
+      .mockImplementation((request: any) => {
+        if (request.endpoint !== '/api/v1/dashboard/26') return get(request);
+        reads += 1;
+        const later = reads > 1;
+        return get(request).then((r: any) => ({
+          json: later
+            ? {
+                result: {
+                  ...r.json.result,
+                  changed_by_name: 'Priya Rao',
+                  changed_on: '2026-11-17T09:30:00',
+                },
+              }
+            : r.json,
+          response: new Response('{}', {
+            headers: { ETag: `"${later ? 'v27' : 'v26'}:accesshash"` },
+          }),
+        }));
+      });
+    const put = jest.spyOn(SupersetCore.SupersetClient, 'put');
+    refusals.forEach(status =>
+      put.mockRejectedValueOnce(new Response('{}', { status })),
+    );
+    put.mockResolvedValue({ json: { result: {} } } as any);
+    mockedIsFeatureEnabled.mockReturnValue(false);
+    render(<PropertiesModal {...createProps()} />, { useRedux: true });
+    expect(
+      await screen.findByTestId('dashboard-edit-properties-form'),
+    ).toBeInTheDocument();
+    userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByText('This dashboard was changed after you opened it'),
+    ).toBeInTheDocument();
+    return {
+      put,
+      restore: () => [getSpy, put].forEach(s => s.mockRestore()),
+    };
+  };
+
+  test('a refused save, overwritten, is resent with the version saved now', async () => {
+    const { put, restore } = await staleProperties();
+    // no history for this fixture (no uuid): the first line comes from the GET
+    expect(screen.getByText(/^Changed by Priya Rao at /)).toBeInTheDocument();
+
+    userEvent.click(
+      screen.getByRole('button', { name: 'Overwrite their changes' }),
+    );
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put.mock.calls[1][0].headers).toMatchObject({ 'If-Match': '"v27"' });
+    restore();
+  });
+
+  test('an Overwrite that fails keeps the loaded version for the next Save', async () => {
+    const { put, restore } = await staleProperties([412, 500]);
+
+    userEvent.click(
+      screen.getByRole('button', { name: 'Overwrite their changes' }),
+    );
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(3));
+    expect(put.mock.calls.map(([req]: any) => req.headers['If-Match'])).toEqual(
+      ['"v26"', '"v27"', '"v26"'],
+    );
+    restore();
+  });
+
+  test('a refused save, discarded, reloads the form and its version', async () => {
+    const { put, restore } = await staleProperties();
+
+    userEvent.click(
+      screen.getByRole('button', { name: 'Discard my changes and reload' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText('This dashboard was changed after you opened it'),
+      ).not.toBeInTheDocument(),
+    );
+    userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put.mock.calls[1][0].headers).toMatchObject({ 'If-Match': '"v27"' });
+    restore();
+  });
+
   test('preserves certification fields on save without opening Certification section', async () => {
     const saved = jest.spyOn(dashboardInfoActions, 'dashboardSaveSucceeded');
     // Accordion Collapse only mounts the active panel, so certifiedBy /

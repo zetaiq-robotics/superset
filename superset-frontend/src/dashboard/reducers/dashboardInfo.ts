@@ -134,17 +134,25 @@ export default function dashboardInfoReducer(
 ): DashboardInfoState {
   switch (action.type) {
     case SET_DASHBOARD_VERSIONS:
+      if ((action as DashboardInfoAction).dashboardId !== state.id) {
+        return state;
+      }
       return {
         ...state,
         versions: (action as DashboardInfoAction).versions as Versions,
       };
     case DASHBOARD_OWN_WRITE: {
-      const { dashboardId, replaced, created } = action as DashboardInfoAction;
+      const { dashboardId, replaced, created, sent } =
+        action as DashboardInfoAction;
       if (dashboardId !== state.id) return state;
+      const known = state.versions ?? NO_VERSIONS;
       return {
         ...state,
         versions: adoptAfterOwnWrite(
-          state.versions ?? NO_VERSIONS,
+          // an Overwrite that replaced the version it was sent against
+          sent !== undefined && replaced === sent
+            ? { ...known, base: sent as string | null }
+            : known,
           replaced as string | null,
           created as string | null,
         ),

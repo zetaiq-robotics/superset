@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import { makeApi } from '@superset-ui/core';
+import { makeApi, SupersetApiError } from '@superset-ui/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 export enum ResourceStatus {
@@ -67,29 +67,6 @@ const initialState: LoadingState = {
   error: null,
 };
 
-/**
- * A general-purpose hook to fetch the response from an endpoint.
- * Returns the full response body from the API, including metadata.
- *
- * Note: You likely want {useApiV1Resource} instead of this!
- *
- * TODO Store the state in redux or something, share state between hook instances.
- *
- * TODO Include a function in the returned resource object to refresh the data.
- *
- * A core design decision here is composition > configuration,
- * and every hook should only have one job.
- * Please address new needs with new hooks if possible,
- * rather than adding config options to this hook.
- *
- * @param endpoint The url where the resource is located.
- */
-export function useApiResourceFullBody<RESULT>(
-  endpoint: string,
-): Resource<RESULT> {
-  return useFetchedResource(endpoint, fetchJsonBody as Fetcher<RESULT>);
-}
-
 type Fetcher<RESULT> = (endpoint: string) => Promise<RESULT>;
 
 const fetchJsonBody: Fetcher<unknown> = endpoint =>
@@ -104,22 +81,13 @@ const fetchV1ResultWithEtag: Fetcher<{
     endpoint,
     responseType: 'raw',
   })({});
-  const { result } = await response.json();
-  return { result, etag: response.headers.get('ETag') };
+  const body = await response.json();
+  // a 200 carrying an error is a failure, as makeApi treats it
+  if (body && typeof body === 'object' && 'error' in body) {
+    throw new SupersetApiError({ message: String(body.error) });
+  }
+  return { result: body.result, etag: response.headers.get('ETag') };
 };
-
-/**
- * Like {useApiV1Resource}, plus the response's ETag header (null when the
- * server sent none).
- */
-export function useApiV1ResourceWithEtag<RESULT>(
-  endpoint: string,
-): Resource<{ result: RESULT; etag: string | null }> {
-  return useFetchedResource(
-    endpoint,
-    fetchV1ResultWithEtag as Fetcher<{ result: RESULT; etag: string | null }>,
-  );
-}
 
 // `fetcher` must be a stable (module-level) function: only `endpoint`
 // changes trigger a new request.
@@ -170,6 +138,42 @@ function useFetchedResource<RESULT>(
   }, [endpoint, fetcher]);
 
   return resource;
+}
+
+/**
+ * A general-purpose hook to fetch the response from an endpoint.
+ * Returns the full response body from the API, including metadata.
+ *
+ * Note: You likely want {useApiV1Resource} instead of this!
+ *
+ * TODO Store the state in redux or something, share state between hook instances.
+ *
+ * TODO Include a function in the returned resource object to refresh the data.
+ *
+ * A core design decision here is composition > configuration,
+ * and every hook should only have one job.
+ * Please address new needs with new hooks if possible,
+ * rather than adding config options to this hook.
+ *
+ * @param endpoint The url where the resource is located.
+ */
+export function useApiResourceFullBody<RESULT>(
+  endpoint: string,
+): Resource<RESULT> {
+  return useFetchedResource(endpoint, fetchJsonBody as Fetcher<RESULT>);
+}
+
+/**
+ * Like {useApiV1Resource}, plus the response's ETag header (null when the
+ * server sent none).
+ */
+export function useApiV1ResourceWithEtag<RESULT>(
+  endpoint: string,
+): Resource<{ result: RESULT; etag: string | null }> {
+  return useFetchedResource(
+    endpoint,
+    fetchV1ResultWithEtag as Fetcher<{ result: RESULT; etag: string | null }>,
+  );
 }
 
 /**

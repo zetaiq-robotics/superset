@@ -67,9 +67,20 @@ import { ResourceStatus } from 'src/hooks/apiResources/apiResources';
 import type { AgGridChartState } from '@superset-ui/core';
 import type { DashboardChartStates } from 'src/dashboard/types/chartState';
 import { UPDATE_COMPONENTS_PARENTS_LIST } from './dashboardLayout';
-import { ifMatch } from 'src/dashboard/live/versionTracker';
+import {
+  ifMatch,
+  noteNewer,
+  NO_VERSIONS,
+  versionOf,
+} from 'src/dashboard/live/versionTracker';
+import {
+  dashboardLastSave,
+  fetchEtag,
+  loadStaleSummary,
+} from 'src/dashboard/live/changeSummary';
 import {
   adoptOwnWrite,
+  setDashboardVersions,
   saveChartConfiguration,
   dashboardInfoChanged,
   SAVE_CHART_CONFIG_COMPLETE,
@@ -376,6 +387,13 @@ export function setOverrideConfirm(
   };
 }
 
+export const SET_STALE_SAVE = 'SET_STALE_SAVE';
+
+/** Opens (or, with undefined, closes) the stale-save modal. */
+export function setStaleSave(staleSave: DashboardState['staleSave']) {
+  return { type: SET_STALE_SAVE, staleSave };
+}
+
 export const SAVE_DASHBOARD_STARTED = 'SAVE_DASHBOARD_STARTED';
 
 interface SaveDashboardStartedAction {
@@ -650,6 +668,7 @@ export function saveDashboardRequest(
 
       dispatch(addSuccessToast(t('This dashboard was saved successfully.')));
       dispatch(setOverrideConfirm(undefined));
+      dispatch(setStaleSave(undefined));
       return response;
     };
 
@@ -689,19 +708,58 @@ export function saveDashboardRequest(
 
       const updateDashboard = async (): Promise<JsonObject | void> => {
         try {
-          // a stale base answers 412, which onError reports like any failure
+          let sent = getState().dashboardInfo?.versions?.base;
+          if (saveType === SAVE_TYPE_OVERWRITE_CONFIRMED) {
+            // An explicit overwrite: this one PUT is sent against the version
+            // saved now (still guarded: a save landing in between answers
+            // 412 again). The base moves only if the PUT succeeds.
+            const etag = await fetchEtag(`/api/v1/dashboard/${id}`);
+            if (etag) {
+              const known = getState().dashboardInfo?.versions ?? NO_VERSIONS;
+              dispatch(setDashboardVersions(id, noteNewer(known, etag)));
+            }
+            sent = versionOf(etag);
+          }
           const response = await SupersetClient.put({
             endpoint: `/api/v1/dashboard/${id}`,
             headers: {
               'Content-Type': 'application/json',
-              ...ifMatch(getState().dashboardInfo?.versions?.base),
+              ...ifMatch(sent),
             },
             body: JSON.stringify(updatedDashboard),
           });
-          dispatch(adoptOwnWrite(id, response.json));
+          dispatch(adoptOwnWrite(id, response.json, sent));
           return await onUpdateSuccess(response);
         } catch (error) {
-          return onError(error as Response);
+          if ((error as Response)?.status !== 412) {
+            return onError(error as Response);
+          }
+          // Someone else saved since this tab's base: say who and what, and
+          // let the editor choose (StaleSaveModal). One history read.
+          const { uuid, versions = NO_VERSIONS } = getState().dashboardInfo;
+          const etag = (error as Response).headers?.get('ETag');
+          if (etag)
+            dispatch(setDashboardVersions(id, noteNewer(versions, etag)));
+          const summary = await loadStaleSummary(
+            'dashboard',
+            uuid,
+            versions.base,
+            () => dashboardLastSave(id),
+          );
+          dispatch(saveDashboardFinished());
+          dispatch(
+            setStaleSave({
+              dashboardId: id,
+              // a refused Overwrite keeps the save-as input of the first try
+              data:
+                saveType === SAVE_TYPE_OVERWRITE_CONFIRMED
+                  ? getState().dashboardState.staleSave?.data
+                  : data,
+              payload: updatedDashboard,
+              summary,
+            }),
+          );
+          return undefined;
         }
       };
 

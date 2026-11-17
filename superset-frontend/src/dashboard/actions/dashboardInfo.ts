@@ -58,6 +58,35 @@ const putJsonMetadata = (
     headers: ifMatch(base),
   })({ json_metadata: JSON.stringify(metadata) });
 
+export const SET_DASHBOARD_VERSIONS = 'SET_DASHBOARD_VERSIONS';
+
+/** Ignored when the tab has since moved to another dashboard. */
+export function setDashboardVersions(id: number, versions: Versions) {
+  return { type: SET_DASHBOARD_VERSIONS, dashboardId: id, versions };
+}
+
+export const DASHBOARD_OWN_WRITE = 'DASHBOARD_OWN_WRITE';
+
+/**
+ * Dispatch with the response body of every write this tab makes to
+ * dashboard `id`; the reducer applies `adoptAfterOwnWrite`. Ignored when the
+ * tab has since moved to another dashboard.
+ *
+ * `sent` is the `If-Match` the write carried when it was not the base (an
+ * explicit Overwrite): a write that replaced exactly that version moves the
+ * base, as one that replaced the base would.
+ */
+export function adoptOwnWrite(id: number, body: unknown, sent?: string | null) {
+  const pair = (body ?? {}) as VersionPair;
+  return {
+    type: DASHBOARD_OWN_WRITE,
+    dashboardId: id,
+    replaced: pair.old_version_uuid ?? null,
+    created: pair.new_version_uuid ?? null,
+    sent,
+  };
+}
+
 /**
  * PUT the tab's `json_metadata` with one setting changed by `change`.
  *
@@ -88,11 +117,11 @@ async function saveMetadataChange(
       cache: 'no-store',
     })({});
     const etag = fresh.headers.get('ETag');
+    // without a version to send, the retry would overwrite unconditionally
+    if (!etag) throw error;
     const { result } = await fresh.json();
-    if (etag) {
-      const current = getState().dashboardInfo.versions ?? NO_VERSIONS;
-      dispatch(setDashboardVersions(noteNewer(current, etag)));
-    }
+    const current = getState().dashboardInfo.versions ?? NO_VERSIONS;
+    dispatch(setDashboardVersions(id, noteNewer(current, etag)));
     response = await putJsonMetadata(
       id,
       change(JSON.parse(result.json_metadata || '{}')),
@@ -101,29 +130,6 @@ async function saveMetadataChange(
   }
   dispatch(adoptOwnWrite(id, response));
   return response;
-}
-
-export const SET_DASHBOARD_VERSIONS = 'SET_DASHBOARD_VERSIONS';
-
-export function setDashboardVersions(versions: Versions) {
-  return { type: SET_DASHBOARD_VERSIONS, versions };
-}
-
-export const DASHBOARD_OWN_WRITE = 'DASHBOARD_OWN_WRITE';
-
-/**
- * Dispatch with the response body of every write this tab makes to
- * dashboard `id`; the reducer applies `adoptAfterOwnWrite`. Ignored when the
- * tab has since moved to another dashboard.
- */
-export function adoptOwnWrite(id: number, body: unknown) {
-  const pair = (body ?? {}) as VersionPair;
-  return {
-    type: DASHBOARD_OWN_WRITE,
-    dashboardId: id,
-    replaced: pair.old_version_uuid ?? null,
-    created: pair.new_version_uuid ?? null,
-  };
 }
 
 export const DASHBOARD_SAVE_SUCCEEDED = 'DASHBOARD_SAVE_SUCCEEDED';
@@ -259,7 +265,10 @@ export function saveCrossFiltersSetting(crossFiltersEnabled: boolean) {
       const response = await saveMetadataChange(
         dispatch,
         getState,
-        metadata => ({ ...metadata, cross_filters_enabled: crossFiltersEnabled }),
+        metadata => ({
+          ...metadata,
+          cross_filters_enabled: crossFiltersEnabled,
+        }),
       );
 
       const updatedDashboard = response.result;

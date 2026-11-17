@@ -63,6 +63,13 @@ import {
 } from 'src/dashboard/actions/dashboardInfo';
 import { areObjectsEqual } from 'src/reduxUtils';
 import { ifMatch, versionOf } from 'src/dashboard/live/versionTracker';
+import {
+  dashboardLastSave,
+  fetchEtag,
+  loadStaleSummary,
+  StaleSummary,
+} from 'src/dashboard/live/changeSummary';
+import { StaleSaveModal } from 'src/dashboard/components/StaleSaveModal';
 import { AsyncModeOverride } from 'src/utils/asyncMode';
 import { StandardModal, useModalValidation } from 'src/components/Modal';
 import { validateRefreshFrequency } from '../RefreshFrequency';
@@ -170,6 +177,12 @@ const PropertiesModal = ({
   const originalCss = useRef<string | null>(null);
   // ETag of the copy this modal loaded; its save is checked against it
   const loadedEtag = useRef<string | null>(null);
+  const loadedUuid = useRef<string | null>(null);
+  // a save refused because someone else saved first; `overwrite` resends it
+  const [stale, setStale] = useState<{
+    summary: StaleSummary;
+    overwrite: () => void;
+  } | null>(null);
   const cssDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleErrorResponse = async (response: Response) => {
@@ -263,6 +276,7 @@ const PropertiesModal = ({
     }).then(response => {
       loadedEtag.current = response.response?.headers?.get('ETag') ?? null;
       const dashboard = response.json.result;
+      loadedUuid.current = dashboard.uuid ?? null;
       const jsonMetadataObj = dashboard.json_metadata?.length
         ? JSON.parse(dashboard.json_metadata)
         : {};
@@ -480,20 +494,43 @@ const PropertiesModal = ({
         ...morePutProps,
       };
 
-      // a stale copy answers 412, which handleErrorResponse reports
-      SupersetClient.put({
-        endpoint: `/api/v1/dashboard/${dashboardId}`,
-        headers: {
-          'Content-Type': 'application/json',
-          ...ifMatch(versionOf(loadedEtag.current)),
-        },
-        body: JSON.stringify(saveData),
-      }).then(() => {
-        dispatch(dashboardSaveSucceeded(dashboardId));
-        onSubmit(onSubmitProps);
-        onHide();
-        addSuccessToast(t('The dashboard has been saved'));
-      }, handleErrorResponse);
+      // `etag`: the loaded version, or for an Overwrite the version saved now
+      const put = (etag = loadedEtag.current): Promise<void> =>
+        SupersetClient.put({
+          endpoint: `/api/v1/dashboard/${dashboardId}`,
+          headers: {
+            'Content-Type': 'application/json',
+            ...ifMatch(versionOf(etag)),
+          },
+          body: JSON.stringify(saveData),
+        }).then(
+          ({ json }) => {
+            // only a save that landed moves this modal's version
+            loadedEtag.current = json?.new_version_uuid ?? null;
+            dispatch(dashboardSaveSucceeded(dashboardId));
+            onSubmit(onSubmitProps);
+            onHide();
+            addSuccessToast(t('The dashboard has been saved'));
+          },
+          async (response: Response) => {
+            if (response?.status !== 412) return handleErrorResponse(response);
+            return setStale({
+              summary: await loadStaleSummary(
+                'dashboard',
+                loadedUuid.current,
+                versionOf(loadedEtag.current),
+                () => dashboardLastSave(dashboardId),
+              ),
+              // resend once against the version saved now (still guarded)
+              overwrite: () =>
+                fetchEtag(`/api/v1/dashboard/${dashboardId}`).then(
+                  etag => put(etag),
+                  handleErrorResponse,
+                ),
+            });
+          },
+        );
+      put();
     }
   };
 
@@ -585,7 +622,8 @@ const PropertiesModal = ({
     // ZetaIQ: a typed new tag is created at once and swapped for its id, so Save still sends ids.
     if (parsedTags.some(tag => typeof tag.id !== 'number')) {
       ensureTagIds(parsedTags).then(resolved => {
-        if (resolved.length < parsedTags.length) addDangerToast(t('A new tag could not be added'));
+        if (resolved.length < parsedTags.length)
+          addDangerToast(t('A new tag could not be added'));
         setTags(resolved);
       });
     }
@@ -917,6 +955,22 @@ const PropertiesModal = ({
           ]}
         />
       </Form>
+      {stale && (
+        <StaleSaveModal
+          title={t('This dashboard was changed after you opened it')}
+          summary={stale.summary}
+          onHide={() => setStale(null)}
+          onDiscard={() => {
+            // reload the form (and its version) from the dashboard as saved now
+            setStale(null);
+            fetchDashboardDetails();
+          }}
+          onOverwrite={() => {
+            setStale(null);
+            stale.overwrite();
+          }}
+        />
+      )}
     </StandardModal>
   );
 };

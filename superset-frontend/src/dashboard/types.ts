@@ -44,6 +44,7 @@ import { TagType } from 'src/components/Tag/TagType';
 import { ChartState } from '../explore/types';
 import { AutoRefreshStatus } from './types/autoRefresh';
 import type { Versions } from './live/versionTracker';
+import type { StaleSummary } from './live/changeSummary';
 
 export type { Dashboard } from 'src/types/Dashboard';
 
@@ -145,6 +146,15 @@ export type DashboardState = {
     }[];
     dashboardId: number;
     data: JsonObject;
+  };
+  /** A full save refused with 412, waiting for the editor's choice. */
+  staleSave?: {
+    dashboardId: number;
+    /** saveDashboardRequest's input, for Save as a copy (absent after a confirmed-diff save) */
+    data?: JsonObject;
+    /** the refused PUT body, resent by Overwrite */
+    payload: JsonObject;
+    summary: StaleSummary;
   };
   chartStates?: Record<string, JsonObject>;
   autoRefreshStatus?: AutoRefreshStatus;
