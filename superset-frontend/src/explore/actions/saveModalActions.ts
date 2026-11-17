@@ -31,6 +31,12 @@ import { addSuccessToast } from 'src/components/MessageToasts/actions';
 import { isEmpty } from 'lodash-es';
 import { Slice } from 'src/dashboard/types';
 import { ifMatch } from 'src/dashboard/live/versionTracker';
+import {
+  firstLineOnly,
+  loadStaleSummary,
+  StaleSaveError,
+  StaleSummary,
+} from 'src/dashboard/live/changeSummary';
 import { Operators } from '../constants';
 import { buildV1ChartDataPayload } from '../exploreUtils';
 import { nanoid } from 'nanoid';
@@ -237,6 +243,29 @@ const addToasts = (
   return toasts;
 };
 
+// Explore has the chart's id; the history is keyed by its uuid. One list
+// read gives the uuid and, for when the history fails, who saved last (the
+// single-chart GET carries no changed-by name).
+const chartChangesSince = async (
+  sliceId: number,
+  since: string | null | undefined,
+): Promise<StaleSummary> => {
+  try {
+    const { json } = await SupersetClient.get({
+      endpoint: `/api/v1/chart/?q=${rison.encode({
+        filters: [{ col: 'id', opr: 'eq', value: sliceId }],
+        columns: ['uuid', 'changed_by_name', 'changed_on_utc'],
+      })}`,
+    });
+    const chart = json.result?.[0];
+    return await loadStaleSummary('chart', chart?.uuid, since, async () =>
+      firstLineOnly(chart?.changed_by_name, chart?.changed_on_utc),
+    );
+  } catch {
+    return null;
+  }
+};
+
 export const updateSlice =
   (
     slice: Slice,
@@ -305,7 +334,7 @@ export const updateSlice =
       ) {
         payload.normalization_changes = Object.values(matchingTransitions);
       }
-      // a stale version answers 412, which reaches the caller as a failure
+      // a stale version answers 412: StaleSaveError, for the caller's modal
       const response = await SupersetClient.put({
         endpoint: `/api/v1/chart/${sliceId}`,
         headers: ifMatch(slice.version_uuid),
@@ -327,6 +356,11 @@ export const updateSlice =
       return response.json;
     } catch (error) {
       dispatch(saveSliceFailed());
+      if ((error as Response)?.status === 412) {
+        throw new StaleSaveError(
+          await chartChangesSince(sliceId, slice.version_uuid),
+        );
+      }
       throw error;
     }
   };

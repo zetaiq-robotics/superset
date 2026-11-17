@@ -33,8 +33,10 @@ import fetchMock from 'fetch-mock';
 import { useEffect } from 'react';
 import {
   getExtensionsRegistry,
+  SupersetClient,
   type ExploreSaveFolderProps,
 } from '@superset-ui/core';
+import { StaleSaveError } from 'src/dashboard/live/changeSummary';
 import type {
   SelectValue,
   SelectOptionsPagePromise,
@@ -1112,4 +1114,162 @@ test('a failed filing still completes the save and closes the dialog', async () 
 test('no folder field without the explore.save.folder extension', () => {
   const { queryByTestId } = setup();
   expect(queryByTestId('save-folder-slot')).not.toBeInTheDocument();
+});
+
+test('addChartToDashboard sends If-Match and, refused once, rebuilds on a fresh read', async () => {
+  const tab = (children: string[]) => ({
+    TAB: { type: 'TAB', id: 'TAB', children },
+  });
+  // Someone else added ROW-theirs between the first read and the PUT.
+  const reads = [
+    { layout: tab([]), etag: '"v1:access"' },
+    {
+      layout: {
+        ...tab(['ROW-theirs']),
+        'ROW-theirs': { type: 'ROW', id: 'ROW-theirs', children: [] },
+      },
+      etag: '"v2:access"',
+    },
+  ];
+  const get = jest
+    .spyOn(SupersetClient, 'get')
+    .mockImplementation((async () => {
+      const { layout, etag } = reads.shift()!;
+      return {
+        json: { result: { id: 1, position_json: JSON.stringify(layout) } },
+        response: new Response('{}', { headers: { ETag: etag } }),
+      };
+    }) as any);
+  const put = jest
+    .spyOn(SupersetClient, 'put')
+    .mockRejectedValueOnce(new Response('{}', { status: 412 }))
+    .mockResolvedValueOnce({ json: {} } as any);
+
+  await addChartToDashboard(1, 9, 'TAB', 'Mine');
+
+  expect(get).toHaveBeenCalledTimes(2);
+  expect(put.mock.calls.map(([req]: any) => req.headers['If-Match'])).toEqual([
+    '"v1"',
+    '"v2"',
+  ]);
+  const sent = JSON.parse(JSON.parse(put.mock.calls[1][0].body!).position_json);
+  expect(sent['ROW-theirs']).toBeDefined();
+  expect(sent['CHART-9']).toBeDefined();
+  get.mockRestore();
+  put.mockRestore();
+});
+
+test('addChartToDashboard gives up after a second 412', async () => {
+  const get = jest.spyOn(SupersetClient, 'get').mockResolvedValue({
+    json: {
+      result: {
+        id: 1,
+        position_json: JSON.stringify({
+          TAB: { type: 'TAB', id: 'TAB', children: [] },
+        }),
+      },
+    },
+    response: new Response('{}', { headers: { ETag: '"v:access"' } }),
+  } as any);
+  const put = jest
+    .spyOn(SupersetClient, 'put')
+    .mockRejectedValue(new Response('{}', { status: 412 }));
+
+  await expect(addChartToDashboard(1, 9, 'TAB', 'Mine')).rejects.toBeTruthy();
+  expect(put).toHaveBeenCalledTimes(2);
+  get.mockRestore();
+  put.mockRestore();
+});
+
+const staleSetup = () => {
+  // the chart GET answers with the version saved now
+  fetchMock.removeRoutes();
+  fetchMock.get('glob:*/api/v1/chart/1', {
+    body: { result: { id: 1 } },
+    headers: { ETag: '"now:access"' },
+  });
+  const actions = {
+    setFormData: jest.fn(),
+    getSliceDashboards: jest.fn().mockResolvedValue([]),
+    saveSliceFailed: jest.fn(),
+    updateSlice: jest
+      .fn()
+      .mockRejectedValueOnce(
+        new StaleSaveError({
+          changedBy: 'Priya',
+          changedAt: 'Nov 17, 2026 10:00 AM',
+          lines: ['Priya changed: chart settings'],
+        }),
+      )
+      .mockResolvedValue({ id: 1 }),
+    createSlice: jest.fn().mockResolvedValue({ id: 2 }),
+  };
+  const view = setup(
+    { ...defaultProps, actions, sliceName: 'title' },
+    mockStore({
+      ...initialState,
+      explore: { ...initialState.explore, datasource: { type: 'table' } },
+    }),
+  );
+  fireEvent.click(view.getByRole('radio', { name: 'Save (Overwrite)' }));
+  fireEvent.click(view.getByRole('button', { name: 'Save' }));
+  return { ...view, actions };
+};
+
+test('a refused chart overwrite shows who changed what', async () => {
+  const { findByText, getByText } = staleSetup();
+
+  expect(
+    await findByText('This chart was changed after you opened it'),
+  ).toBeInTheDocument();
+  expect(
+    getByText('Changed by Priya at Nov 17, 2026 10:00 AM.'),
+  ).toBeInTheDocument();
+  expect(getByText('Priya changed: chart settings')).toBeInTheDocument();
+});
+
+test('chart Overwrite re-reads the version and resends with it', async () => {
+  const { findByRole, actions } = staleSetup();
+
+  fireEvent.click(
+    await findByRole('button', { name: 'Overwrite their changes' }),
+  );
+
+  await waitFor(() => expect(actions.updateSlice).toHaveBeenCalledTimes(2));
+  expect(actions.updateSlice.mock.calls[1][0].version_uuid).toBe('now');
+  expect(fetchMock.callHistory.calls('glob:*/api/v1/chart/1')).toHaveLength(1);
+});
+
+test('a chart Overwrite that fails leaves the chart version for the next Save', async () => {
+  const { findByRole, getByRole, actions } = staleSetup();
+  const overwrite = await findByRole('button', {
+    name: 'Overwrite their changes',
+  });
+  actions.updateSlice
+    .mockReset()
+    .mockRejectedValueOnce(new Response('{}', { status: 500 }))
+    .mockResolvedValue({ id: 1 });
+
+  fireEvent.click(overwrite);
+  await waitFor(() => expect(actions.updateSlice).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(getByRole('button', { name: 'Save' })).toBeEnabled(),
+  );
+  fireEvent.click(getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => expect(actions.updateSlice).toHaveBeenCalledTimes(2));
+  // the retry carried the version saved now; the next Save the one loaded
+  expect(actions.updateSlice.mock.calls[0][0].version_uuid).toBe('now');
+  expect(actions.updateSlice.mock.calls[1][0]).toEqual(
+    initialState.explore.slice,
+  );
+});
+
+test('chart Save as a copy uses save-as', async () => {
+  const { findByRole, actions } = staleSetup();
+
+  fireEvent.click(await findByRole('button', { name: 'Save as a copy' }));
+
+  await waitFor(() => expect(actions.createSlice).toHaveBeenCalledTimes(1));
+  expect(actions.updateSlice).toHaveBeenCalledTimes(1);
 });

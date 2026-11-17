@@ -77,6 +77,13 @@ import { Dashboard } from 'src/types/Dashboard';
 import { canOverwriteSlice as canOverwriteSliceFor } from 'src/explore/exploreUtils/canOverwriteSlice';
 import { TabNode, TabTreeNode } from '../types';
 import { CHART_WIDTH, CHART_HEIGHT } from 'src/dashboard/constants';
+import { ifMatch, versionOf } from 'src/dashboard/live/versionTracker';
+import {
+  fetchEtag,
+  StaleSaveError,
+  StaleSummary,
+} from 'src/dashboard/live/changeSummary';
+import { StaleSaveModal } from 'src/dashboard/components/StaleSaveModal';
 
 // Session storage key for recent dashboard
 const SK_DASHBOARD_ID = 'save_chart_recent_dashboard';
@@ -97,11 +104,7 @@ export const createRedirectParams = (
   return searchParams;
 };
 
-/**
- * Adds a chart to a dashboard tab by updating the position_json.
- * Exported for testing purposes.
- */
-export const addChartToDashboard = async (
+const putChartIntoLayout = async (
   dashboardId: number,
   chartId: number,
   tabId: string,
@@ -110,6 +113,7 @@ export const addChartToDashboard = async (
   const dashboardResponse = await SupersetClient.get({
     endpoint: `/api/v1/dashboard/${dashboardId}`,
   });
+  const etag = dashboardResponse.response?.headers?.get('ETag') ?? null;
 
   const dashboardData = dashboardResponse.json.result;
 
@@ -187,11 +191,34 @@ export const addChartToDashboard = async (
 
   await SupersetClient.put({
     endpoint: `/api/v1/dashboard/${dashboardId}`,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...ifMatch(versionOf(etag)),
+    },
     body: JSON.stringify({
       position_json: JSON.stringify(updatedPositionJson),
     }),
   });
+};
+
+/**
+ * Adds a chart to a dashboard tab by updating the position_json.
+ * The whole layout is sent, so the PUT carries the read's version; if
+ * someone saved in between (412) it re-reads, rebuilds and retries once.
+ * Exported for testing purposes.
+ */
+export const addChartToDashboard = async (
+  dashboardId: number,
+  chartId: number,
+  tabId: string,
+  sliceNameParam: string | undefined,
+): Promise<void> => {
+  try {
+    await putChartIntoLayout(dashboardId, chartId, tabId, sliceNameParam);
+  } catch (error) {
+    if ((error as Response)?.status !== 412) throw error;
+    await putChartIntoLayout(dashboardId, chartId, tabId, sliceNameParam);
+  }
 };
 
 interface SaveModalProps {
@@ -252,6 +279,11 @@ const SaveModal = ({
     { label: string; value: string | number } | undefined
   >(undefined);
   const [tabsData, setTabsData] = useState<TabTreeNode[]>([]);
+  // a refused overwrite (someone else saved the chart first)
+  const [stale, setStale] = useState<{
+    summary: StaleSummary;
+    gotodash: boolean;
+  } | null>(null);
   const [selectedTab, setSelectedTab] = useState<
     { label: string; value: string | number } | undefined
   >(undefined);
@@ -466,12 +498,6 @@ const SaveModal = ({
     dispatch(setSaveChartModalVisibility(false));
   }, [dispatch]);
 
-  const handleRedirect = useCallback(
-    (windowLocationSearch: string, chart: { id: number }) =>
-      createRedirectParams(windowLocationSearch, chart, action),
-    [action],
-  );
-
   const addChartToDashboardTab = useCallback(
     async (
       dashboardId: number,
@@ -489,7 +515,12 @@ const SaveModal = ({
   );
 
   const saveOrOverwrite = useCallback(
-    async (gotodash: boolean) => {
+    async (
+      gotodash: boolean,
+      // the stale-save choices: save as a copy, or overwrite from `version`
+      override: { action?: SaveActionType; version?: string | null } = {},
+    ) => {
+      const saveAction = override.action ?? action;
       setIsLoading(true);
       const tableState = form_data?.table_state;
       const sliceId = slice?.slice_id;
@@ -532,7 +563,7 @@ const SaveModal = ({
 
         //  Get chart dashboards
         let sliceDashboards: number[] = [];
-        if (slice && action === 'overwrite') {
+        if (slice && saveAction === 'overwrite') {
           sliceDashboards = await actions.getSliceDashboards(slice);
         }
 
@@ -557,7 +588,7 @@ const SaveModal = ({
               ? sliceDashboards
               : [...sliceDashboards, dashboardResult.id];
             if (
-              action === ChartStatusType.saveas &&
+              saveAction === ChartStatusType.saveas &&
               selectedTab?.value !== 'OUT_OF_TAB'
             ) {
               selectedTabId = selectedTab?.value as string;
@@ -567,9 +598,11 @@ const SaveModal = ({
 
         //  Update or create slice
         let value: { id: number };
-        if (action === 'overwrite') {
+        if (saveAction === 'overwrite') {
           value = await actions.updateSlice(
-            slice,
+            'version' in override
+              ? { ...slice, version_uuid: override.version }
+              : slice,
             newSliceName,
             sliceDashboards,
             dashboardResult
@@ -640,13 +673,20 @@ const SaveModal = ({
           history.push(url);
           return;
         }
-        const searchParams = handleRedirect(window.location.search, value);
+        const searchParams = createRedirectParams(
+          window.location.search,
+          value,
+          saveAction,
+        );
         history.replace(`/explore/?${searchParams.toString()}`, {
-          saveAction: action,
+          saveAction,
         });
 
         setIsLoading(false);
         onHide();
+      } catch (error) {
+        if (!(error instanceof StaleSaveError)) throw error;
+        setStale({ summary: error.summary, gotodash });
       } finally {
         setIsLoading(false);
       }
@@ -667,10 +707,41 @@ const SaveModal = ({
       addChartToDashboardTab,
       addDangerToast,
       history,
-      handleRedirect,
       onHide,
     ],
   );
+
+  const renderStaleSave = () =>
+    stale && (
+      <StaleSaveModal
+        title={t('This chart was changed after you opened it')}
+        summary={stale.summary}
+        onHide={() => setStale(null)}
+        onDiscard={() => {
+          setStale(null);
+          onHide();
+          // the saved chart, without this tab's unsaved form data
+          history.push(`/explore/?slice_id=${slice?.slice_id}`);
+        }}
+        onCopy={() => {
+          setStale(null);
+          saveOrOverwrite(stale.gotodash, {
+            action: ChartStatusType.saveas,
+          }).catch(() => actions.saveSliceFailed());
+        }}
+        onOverwrite={() => {
+          setStale(null);
+          // This one save is sent against the version saved now (still
+          // guarded); `slice.version_uuid` stays until a save lands and
+          // Explore reloads the chart.
+          fetchEtag(`/api/v1/chart/${slice?.slice_id}`)
+            .then(etag =>
+              saveOrOverwrite(stale.gotodash, { version: versionOf(etag) }),
+            )
+            .catch(() => actions.saveSliceFailed());
+        }}
+      />
+    );
 
   const loadDashboards = useCallback(
     async (search: string, page: number, pageSize: number) => {
@@ -958,6 +1029,7 @@ const SaveModal = ({
       ) : (
         renderSaveChartModal()
       )}
+      {renderStaleSave()}
     </StyledModal>
   );
 };

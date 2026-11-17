@@ -31,6 +31,7 @@ import {
   SAVE_CHART_CONFIG_COMPLETE,
   SAVE_CHART_CONFIG_FAIL,
 } from './dashboardInfo';
+import dashboardInfoReducer from '../reducers/dashboardInfo';
 
 afterEach(() => jest.restoreAllMocks());
 
@@ -100,7 +101,10 @@ const behindState = () =>
 
 // PUTs answer with `putStatuses` in order (200 once they run out); the GET
 // answers with the fresh copy at version "fresh".
-function fakeServer(putStatuses: number[]) {
+function fakeServer(
+  putStatuses: number[],
+  etag: string | null = '"fresh:accesshash"',
+) {
   const puts: any[] = [];
   let gets = 0;
   jest.spyOn(SupersetClient, 'request').mockImplementation((async (
@@ -112,7 +116,7 @@ function fakeServer(putStatuses: number[]) {
         JSON.stringify({
           result: { json_metadata: JSON.stringify(freshMetadata) },
         }),
-        { status: 200, headers: { ETag: '"fresh:accesshash"' } },
+        { status: 200, headers: etag ? { ETag: etag } : {} },
       );
     }
     puts.push(config);
@@ -187,7 +191,7 @@ test.each(settingWrites)(
     expect(server.sentMetadata(1)).toEqual({ ...freshMetadata, ...change });
     // the tab has now seen "fresh"; its base moves only per adoptAfterOwnWrite
     expect(dispatch).toHaveBeenCalledWith(
-      setDashboardVersions({ base: 'a', latest: 'fresh' }),
+      setDashboardVersions(1, { base: 'a', latest: 'fresh' }),
     );
     expect(dispatch).toHaveBeenCalledWith(
       adoptOwnWrite(1, { old_version_uuid: 'fresh', new_version_uuid: 'new' }),
@@ -216,3 +220,39 @@ test.each(settingWrites)(
     );
   },
 );
+
+test.each(settingWrites)(
+  '%s does not retry without If-Match when the re-read has no ETag',
+  async (_name, write) => {
+    const server = fakeServer([412], null);
+    const dispatch = jest.fn();
+
+    await run(write(), dispatch);
+
+    expect(server.gets()).toBe(1);
+    expect(server.puts).toHaveLength(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: ADD_TOAST,
+        payload: expect.objectContaining({ toastType: ToastType.Danger }),
+      }),
+    );
+  },
+);
+
+test('versions for another dashboard are ignored', () => {
+  const state = { id: 1, versions: { base: 'a', latest: 'a' } } as any;
+
+  expect(
+    dashboardInfoReducer(
+      state,
+      setDashboardVersions(2, { base: 'x', latest: 'x' }) as any,
+    ).versions,
+  ).toEqual({ base: 'a', latest: 'a' });
+  expect(
+    dashboardInfoReducer(
+      state,
+      setDashboardVersions(1, { base: 'b', latest: 'b' }) as any,
+    ).versions,
+  ).toEqual({ base: 'b', latest: 'b' });
+});

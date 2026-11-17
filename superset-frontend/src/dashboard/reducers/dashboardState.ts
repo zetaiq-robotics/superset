@@ -44,6 +44,7 @@ import {
   ON_FILTERS_REFRESH_SUCCESS,
   SET_DATASETS_STATUS,
   SET_OVERRIDE_CONFIRM,
+  SET_STALE_SAVE,
   SAVE_DASHBOARD_STARTED,
   SAVE_DASHBOARD_FINISHED,
   SET_DASHBOARD_LABELS_COLORMAP_SYNCABLE,
@@ -144,6 +145,7 @@ interface DashboardStateAction {
   inactiveTabs?: string[];
   prevTabId?: string;
   overwriteConfirmMetadata?: JsonObject;
+  staleSave?: JsonObject;
   isOpen?: boolean;
   vizType?: string;
   chartState?: JsonObject;
@@ -385,6 +387,9 @@ export default function dashboardStateReducer(
         ...state,
         overwriteConfirmMetadata: action.overwriteConfirmMetadata,
       };
+    },
+    [SET_STALE_SAVE](): DashboardStateShape {
+      return { ...state, staleSave: action.staleSave };
     },
     [SET_FOCUSED_FILTER_FIELD](): DashboardStateShape {
       return {

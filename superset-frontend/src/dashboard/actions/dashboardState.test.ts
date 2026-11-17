@@ -240,11 +240,30 @@ describe('dashboardState actions', () => {
           SAVE_TYPE_OVERWRITE_CONFIRMED,
         );
         thunk(dispatch, getState);
-        expect(getStub.mock.calls.length).toBe(0);
         expect(postStub.mock.calls.length).toBe(0);
         await waitFor(() => expect(putStub.mock.calls.length).toBe(1));
         const { body } = putStub.mock.calls[0][0];
         expect(body).toBe(JSON.stringify(confirmedDashboardData));
+      });
+
+      test('a confirmed overwrite is sent against the version saved now, not the stale base', async () => {
+        getStub.mockResolvedValue({
+          json: { result: mockDashboardData },
+          response: new Response('{}', { headers: { ETag: '"now:access"' } }),
+        } as any);
+        const { dispatch, getState } = liveStore({ base: 'a', latest: 'a' });
+
+        await saveDashboardRequest(
+          newDashboardData,
+          1,
+          SAVE_TYPE_OVERWRITE_CONFIRMED,
+        )(dispatch, getState);
+
+        expect(getStub.mock.calls[0][0].endpoint).toBe('/api/v1/dashboard/1');
+        expect(getStub.mock.invocationCallOrder[0]).toBeLessThan(
+          putStub.mock.invocationCallOrder[0],
+        );
+        expect(putStub.mock.calls[0][0].headers['If-Match']).toBe('"now"');
       });
 
       test('warns about the overwrite values when a diff is detected', async () => {
@@ -1217,10 +1236,11 @@ function stubWrites(replaced: string, created: string, result: unknown = []) {
 }
 
 const fullSave = (dispatch: any, getState: any) =>
-  saveDashboardRequest(mockDashboardData, 1, SAVE_TYPE_OVERWRITE)(
-    dispatch,
-    getState,
-  );
+  saveDashboardRequest(
+    mockDashboardData,
+    1,
+    SAVE_TYPE_OVERWRITE,
+  )(dispatch, getState);
 
 const lastPutHeaders = (put: jest.SpyInstance) =>
   put.mock.calls[put.mock.calls.length - 1][0].headers;
@@ -1270,7 +1290,13 @@ test.each([
     'filters',
     [],
     (d: any) =>
-      d(setFilterConfiguration({ modified: [], deleted: ['F-1'], reordered: [] })),
+      d(
+        setFilterConfiguration({
+          modified: [],
+          deleted: ['F-1'],
+          reordered: [],
+        }),
+      ),
   ],
   [
     'chart customizations',
