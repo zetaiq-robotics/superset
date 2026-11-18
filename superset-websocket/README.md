@@ -16,7 +16,7 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
-<!-- Modified by ZetaIQ: identity from the gateway's bearer token checked by introspection replaces the JWT cookie; per-dashboard subscriptions. -->
+<!-- Modified by ZetaIQ: identity from the gateway's bearer token checked by introspection replaces the JWT cookie; per-dashboard subscriptions; tenant channels, cross-tenant drop and audience-sized spread. -->
 
 # Superset WebSocket Server
 
@@ -30,7 +30,7 @@ events out to socket routing keys bound to an introspected identity.
 - Node.js 20.11+ to run the built bundle (the build targets `node20`, and
   `import.meta.dirname` requires 20.11). Building and developing this package
   follow the stricter `engines` range in `package.json`.
-- Redis or Valkey, reachable for Pub/Sub
+- Redis 7.4+ (field TTL via `HEXPIRE`), reachable for Pub/Sub
 
 To use realtime push, enable it in the Superset backend (`WEBSOCKET_ENABLE`,
 `WEBSOCKET_URL`; see below) and run this server behind the read gateway, which
@@ -38,16 +38,16 @@ stamps each upgrade with the caller's bearer token.
 
 ## Architecture
 
-### The `realtime` Pub/Sub channel and the message envelope
+### Pub/Sub channels and the message envelope
 
-Realtime events are published to a single Redis **Pub/Sub** channel,
-`<REALTIME_CHANNEL_PREFIX>realtime` (just `realtime` with the default empty
-prefix), by the Superset Flask app (`superset/tasks/manager.py`). Pub/Sub is
+Realtime events are published by the Superset Flask app to one Redis
+**Pub/Sub** channel per tenant, `t:<tenant>:realtime` (see
+[Tenant channels and spread](#tenant-channels-and-spread)). Pub/Sub is
 intentionally best-effort (fire-and-forget, at-most-once — no replay): it
 accelerates each feature's authoritative REST/poll path rather than guaranteeing
 delivery, so a message missed during a disconnect is reconciled by a frontend
 catch-up / REST refetch. See [Superset Configuration](#superset-configuration)
-for the prefix and its Redis ACL implications.
+for the Redis ACL implications.
 
 Each Redis message is a self-describing envelope that separates **what** a message
 is from **who** receives it:
@@ -141,13 +141,40 @@ On `SIGTERM` the server stops admitting upgrades (one still waiting on
 introspection answers `503`), closes every socket with `1012` so clients
 reconnect promptly, and exits a second later.
 
-The service is stateless apart from process-local live socket handles. Each
-replica subscribes to the same Pub/Sub channel, receives the same events, and
+The service is stateless apart from process-local live socket handles and its
+viewer counts in Redis. Each
+replica subscribes to the same Pub/Sub channels, receives the same events, and
 forwards only to matching sockets connected to that replica. Sticky sessions
 are not required; a client that reconnects to another replica presents a fresh
 token and is bound to the same person channel. A one-shot catch-up fetch on
 reconnect reconciles any events missed while disconnected. There is no
 recurring poll while the socket is connected.
+
+### Tenant channels and spread
+
+The server subscribes by pattern to `t:*:realtime`; upstream's `realtime`
+channel is not subscribed, so its topics are off. An envelope is dropped whole, and nothing from it delivered, when its
+channel is not `^t:[a-z0-9]{2,63}:realtime$`, its scope is
+`authenticated_global`, it has no routes, or any route does not start with the
+channel's own `t:<tenant>:` (counted as `ws_cross_tenant_route_dropped`).
+
+- A route `t:<tenant>:d:<uuid>` goes to that dashboard's subscribers on this
+  replica, with `payload.spread_ms = min(30000, 50 × viewers)` added; viewers is
+  the total across replicas. Other routes (person `t:<tenant>:p:<person>`, tab
+  channels) are delivered by channel as upstream does. Browsers get
+  `{topic, payload}` only.
+- Viewer counts live in Superset's Redis, on a second connection: the hash
+  `t:<tenant>:live:<uuid>`, one field per replica (`REPLICA_ID`, default
+  `<hostname>-<pid>`), written with a 60 s field TTL (`HEXPIRE`, Redis 7.4+) on
+  every count change, deleted at 0, and rewritten every 30 s (each write one
+  `MULTI`, so a field never lands without its TTL). One `HVALS` per
+  dashboard route per event, only on replicas with a local subscriber; a read
+  that fails or takes over 250 ms, or any read while this replica's count
+  writes are failing, spreads over 30000 ms; the total is never taken below
+  this replica's own count. A dashboard route whose payload is not an object is
+  dropped (`ws_bad_payload_dropped`). Count failures are
+  logged and counted (`ws_viewer_count_write_failed`,
+  `ws_viewer_count_read_failed`) and never close sockets.
 
 ### Dashboard subscriptions
 
@@ -260,27 +287,15 @@ WEBSOCKET_URL = "<the gateway path that routes to this server>"
 `WEBSOCKET_URL` points at the gateway route, not at this server directly: the
 gateway stamps the bearer token this server introspects.
 
-The following value must be coordinated between the Flask app config and
-this server's `config.json` (or its environment-variable overrides):
-
-| Purpose                     | Flask app config            | WebSocket server config                     |
-| --------------------------- | --------------------------- | ------------------------------------------- |
-| Realtime channel prefix     | `REALTIME_CHANNEL_PREFIX`   | `realtimeChannelPrefix` / `REALTIME_CHANNEL_PREFIX` |
-
 The Redis connection (`redis` / `REDIS_*`) must point at the same Redis instance
-Superset publishes to (`DISTRIBUTED_COORDINATION_CONFIG`). The channel the server
-**subscribes** to is `<REALTIME_CHANNEL_PREFIX>realtime` — the prefix is empty by
-default (channel `realtime`), and the resulting name is a wire-protocol contract
-with the backend producer, so the prefix **must be set identically** on both
-sides (`REALTIME_CHANNEL_PREFIX` in Superset and `REALTIME_CHANNEL_PREFIX` /
-`realtimeChannelPrefix` here). The server forwards each envelope to browsers as
-`{topic, payload}`. A Redis ACL for this server must therefore allow subscribing
-to the **resulting** channel — `realtime` by default, or e.g. `tenant-a:realtime`
-when `REALTIME_CHANNEL_PREFIX=tenant-a:`. Set a per-deployment prefix to keep
-deployments that share one Redis/Valkey from cross-delivering realtime nudges
-(Redis pub/sub is not scoped by DB number).
+Superset publishes to (`DISTRIBUTED_COORDINATION_CONFIG`). The server subscribes
+by pattern to `t:*:realtime` (see [Tenant channels and spread](#tenant-channels-and-spread)).
+There is no channel prefix setting. A Redis
+ACL for this server must allow `PSUBSCRIBE t:*:realtime` and, on keys
+`t:*:live:*`, `HSET`, `HEXPIRE`, `HDEL`, `HVALS`, `MULTI` and `EXEC`. Redis
+Pub/Sub is not scoped by DB number, so give each deployment its own Redis.
 
-### Redis / Valkey connection modes
+### Redis connection modes
 
 The `redis` object (or the `REDIS_*` environment variables) supports the same
 modes as the Python coordination backend: a standalone server, or Redis/Sentinel,

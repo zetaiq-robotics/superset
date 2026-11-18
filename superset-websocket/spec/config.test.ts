@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: introspection and access-check settings replace the JWT settings.
+// Modified by ZetaIQ: introspection and access-check settings replace the JWT settings;
+// the realtime channel prefix is removed.
 import { buildConfig } from '../src/config';
 import { expect, test } from 'vitest';
 
@@ -43,7 +44,6 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   expect(config.statsd.host).toEqual('127.0.0.1');
   expect(config.statsd.port).toEqual(8125);
   expect(config.statsd.globalTags).toEqual([]);
-  expect(config.realtimeChannelPrefix).toEqual('');
 
   process.env.INTROSPECT_URL = 'http://cp:8081/internal/v1/auth/introspect';
   process.env.INTROSPECT_INTERVAL_MS = '30000';
@@ -67,7 +67,6 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   process.env.STATSD_HOST = '15.15.15.15';
   process.env.STATSD_PORT = '8000';
   process.env.STATSD_GLOBAL_TAGS = 'tag-1,tag-2';
-  process.env.REALTIME_CHANNEL_PREFIX = 'tenant-a:';
 
   config = buildConfig();
 
@@ -98,7 +97,6 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   expect(config.statsd.host).toEqual('15.15.15.15');
   expect(config.statsd.port).toEqual(8000);
   expect(config.statsd.globalTags).toEqual(['tag-1', 'tag-2']);
-  expect(config.realtimeChannelPrefix).toEqual('tenant-a:');
 
   delete process.env.INTROSPECT_URL;
   delete process.env.INTROSPECT_INTERVAL_MS;
@@ -121,7 +119,6 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   delete process.env.STATSD_HOST;
   delete process.env.STATSD_PORT;
   delete process.env.STATSD_GLOBAL_TAGS;
-  delete process.env.REALTIME_CHANNEL_PREFIX;
 });
 
 test('buildConfig() performs deep merge between configs', () => {
