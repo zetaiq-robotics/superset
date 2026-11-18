@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a restore counts as this tab's own write, so live
+ * change events are held until it settles.
  */
 import { ReactElement, useCallback, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -41,6 +44,7 @@ import {
   versionRestored,
   type VersionHistoryRootState,
 } from './reducer';
+import { trackOwnWrite } from 'src/dashboard/live/versionTracker';
 import { formatVersionMonthDay } from './display';
 import RestoreConfirmModal from './RestoreConfirmModal';
 
@@ -188,6 +192,14 @@ export function useVersionActions(
     }
     inFlightActions.add(lockKey);
     setIsRestoring(true);
+    // Held as this tab's own write until it settles; by then the page's
+    // reload of the restored version is itself held (versionRestored).
+    let settled = () => {};
+    trackOwnWrite(
+      new Promise<void>(resolve => {
+        settled = resolve;
+      }),
+    );
     try {
       const beforeTransactionId = await latestTransactionId();
       const { message } = await restoreVersion(
@@ -223,6 +235,7 @@ export function useVersionActions(
           : t('Failed to restore %s', restoreTarget.headline),
       );
     } finally {
+      settled();
       inFlightActions.delete(lockKey);
       setIsRestoring(false);
     }

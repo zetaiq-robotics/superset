@@ -15,12 +15,15 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test that the hydration payload carries the ETag.
  */
 import fetchMock from 'fetch-mock';
 import {
   createChartFromSnapshot,
   createDashboardFromSnapshot,
   fetchActivity,
+  fetchDashboardHydrationData,
 } from './api';
 import type {
   ChartVersionSnapshot,
@@ -229,4 +232,14 @@ test('createChartFromSnapshot rejects a version with no viz type or dataset', as
     createChartFromSnapshot(chartSnapshot, 'Sales (copy)'),
   ).rejects.toThrow(/does not record a visualization type and dataset/);
   expect(fetchMock.callHistory.calls('glob:*/api/v1/chart/')).toHaveLength(0);
+});
+
+test('fetchDashboardHydrationData carries the version the dashboard is served at', async () => {
+  fetchMock.get('glob:*/api/v1/dashboard/5?q=*', {
+    body: { result: { id: 5, json_metadata: '{}', position_json: null } },
+    headers: { ETag: 'W/"v9:a:zstd"' },
+  });
+  fetchMock.get('glob:*/api/v1/dashboard/5/charts', { body: { result: [] } });
+  const { dashboard } = await fetchDashboardHydrationData(5);
+  expect((dashboard as { etag?: string }).etag).toBe('W/"v9:a:zstd"');
 });

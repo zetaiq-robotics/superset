@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test for the "no longer available" view.
  */
 import type { ReactNode } from 'react';
 import { Suspense } from 'react';
@@ -599,6 +601,30 @@ test('renders a not-found state instead of throwing when the dashboard 404s', as
     screen.getByRole('button', { name: 'See all dashboards' }),
   );
   expect(window.location.pathname).toBe('/dashboard/list/');
+});
+
+test('unavailable view on 404', async () => {
+  // a live refresh answered 404: deleted, unpublished or no longer shared
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="1" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: { id: 1, metadata: {} },
+        dashboardState: { sliceIds: [], unavailable: true },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+
+  expect(
+    await screen.findByText('This dashboard is no longer available.'),
+  ).toBeInTheDocument();
+  expect(screen.queryByTestId('dashboard-builder')).not.toBeInTheDocument();
 });
 
 test('clears undo history after hydrating the dashboard', async () => {

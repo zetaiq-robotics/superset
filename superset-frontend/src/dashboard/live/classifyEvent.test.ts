@@ -108,6 +108,13 @@ test('edit mode with unsaved changes prompts once per base, then badges', () => 
   expect(
     classifyEvent(changed(), view({ ...editing, promptedBase: 'v1' })),
   ).toBe('badge');
+  // an access-only change is not a save: no prompt, no badge
+  expect(
+    classifyEvent(
+      changed({ reason: 'access', etag: 'v1', version: 1 }),
+      view(editing),
+    ),
+  ).toBe('ignore');
 });
 
 test('edit mode with nothing changed refreshes', () => {

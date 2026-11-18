@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test that the reload after a restore is held as an own write.
  */
 import { ReactNode } from 'react';
 import { Provider } from 'react-redux';
@@ -29,6 +31,7 @@ import {
   type HydrateDashboardData,
 } from 'src/dashboard/actions/hydrate';
 import { CLEAR_DATA_MASK_STATE } from 'src/dataMask/actions';
+import { ownWritesInFlight } from 'src/dashboard/live/versionTracker';
 import { CHART_TYPE, MARKDOWN_TYPE } from 'src/dashboard/util/componentTypes';
 import {
   fetchDashboardHydrationData,
@@ -666,6 +669,33 @@ test('reloading after a restore hydrates with no carried-over dataMask', async (
   await waitFor(() => expect(mockedHydrateDashboard).toHaveBeenCalledTimes(1));
   // A restored version behaves like a fresh page load.
   expect(hydrateMaskArg(0)).toEqual({});
+});
+
+test('a restore reload is held as an own write until it hydrates', async () => {
+  let finish: (data: unknown) => void = () => {};
+  mockedFetchHydration.mockReturnValue(
+    new Promise(resolve => {
+      finish = resolve;
+    }) as ReturnType<typeof fetchDashboardHydrationData>,
+  );
+  const store = makePreviewStore();
+  renderPreviewHook(store);
+  act(() => {
+    store.setState({
+      versionHistory: versionHistoryState({
+        restoreCount: 1,
+        lastRestoredEntityUuid: 'dash-uuid',
+      }),
+    });
+  });
+  expect(ownWritesInFlight()).toBe(1);
+
+  await act(async () => {
+    finish({ dashboard: liveDashboard, charts: [] });
+  });
+  // the restored version is in the store before live events are released
+  expect(mockedHydrateDashboard).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(ownWritesInFlight()).toBe(0));
 });
 
 test('a save landing during the theme fetch does not strand the preview', async () => {

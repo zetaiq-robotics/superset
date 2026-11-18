@@ -40,6 +40,8 @@ export type StaleSummary = {
   changedBy: string;
   changedAt: string;
   lines: string[];
+  /** everyone who saved since the base, each once (the badge names them) */
+  authors?: string[];
 } | null;
 
 /** A full save refused with 412; `summary` is what changed since the base. */
@@ -163,14 +165,15 @@ export async function loadStaleSummary(
       // their base (e.g. a filter) are not the conflict. Only own saves
       // (another tab of theirs): name the newest, as before.
       const me = getBootstrapData().user?.userId;
-      const last =
-        newer.filter(v => me == null || v.changed_by?.id !== me).pop() ??
-        newer.pop();
+      const others = newer.filter(v => me == null || v.changed_by?.id !== me);
+      const savers = others.length ? others : newer;
+      const last = savers[savers.length - 1];
       if (last) {
         return {
           changedBy: authorOf(last),
           changedAt: localTime(last.issued_at),
           lines: summariseChanges(versions, since),
+          authors: [...new Set(savers.map(authorOf))],
         };
       }
     }
@@ -185,7 +188,9 @@ export const firstLineOnly = (
   name: string | null | undefined,
   utc: string | null | undefined,
 ): StaleSummary =>
-  name ? { changedBy: name, changedAt: localTime(utc), lines: [] } : null;
+  name
+    ? { changedBy: name, changedAt: localTime(utc), lines: [], authors: [name] }
+    : null;
 
 /** Who saved the dashboard last, from its own GET. */
 export async function dashboardLastSave(id: number): Promise<StaleSummary> {

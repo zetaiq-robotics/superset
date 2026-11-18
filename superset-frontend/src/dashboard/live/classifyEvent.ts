@@ -80,7 +80,11 @@ export function classifyEvent(ev: DashboardChanged, s: LiveView): LiveOutcome {
   )
     return 'ignore';
 
-  if (s.editMode && s.hasUnsavedChanges)
+  if (s.editMode && s.hasUnsavedChanges) {
+    // not a save, so nothing the editor's copy is behind on; a lost
+    // permission shows up as the save's 403
+    if (ev.reason === 'access') return 'ignore';
     return s.promptedBase === s.versions.base ? 'badge' : 'prompt';
+  }
   return 'refresh';
 }

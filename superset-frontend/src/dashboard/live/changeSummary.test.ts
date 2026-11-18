@@ -185,6 +185,8 @@ test('the first line names the newest other author, not the person refused', asy
   );
 
   expect(summary?.changedBy).toBe('Priya');
+  // the badge names the other savers, each once, oldest first
+  expect(summary?.authors).toEqual(['Lee', 'Priya']);
   expect(summary?.lines).toEqual([
     'Lee changed: CSS',
     'Priya changed: title',

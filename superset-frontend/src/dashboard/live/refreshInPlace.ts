@@ -88,6 +88,35 @@ function keepTabs(
 }
 
 /**
+ * The slug changed (spec §11): an address naming the old slug would no
+ * longer open this dashboard, so put the new one (or the id) in its place.
+ * Replaced outside the router, which would re-load the page for a new path;
+ * the query string, `native_filters_key` included, and the hash are kept.
+ */
+function correctSlug(
+  old: string | null | undefined,
+  slug: string | null | undefined,
+  id: number,
+) {
+  if (!old || old === slug) return;
+  const { pathname, search, hash } = window.location;
+  const parts = pathname.split('/');
+  // the last match: a slug like "dashboard" also matches the route's prefix
+  const at = parts.reduce(
+    (found, part, i) =>
+      part === old || part === encodeURIComponent(old) ? i : found,
+    -1,
+  );
+  if (at < 0) return;
+  parts[at] = slug ? encodeURIComponent(slug) : String(id);
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${parts.join('/')}${search}${hash}`,
+  );
+}
+
+/**
  * Load the dashboard's current version into the open page without losing
  * what the viewer is doing (spec §7.7): filter values, cross-filters, tab,
  * fullscreen chart, expanded charts, refresh interval and scroll position
@@ -212,6 +241,7 @@ export const refreshInPlace =
 
     const anchor = topVisibleChart();
     dispatch({ ...hydrated!, live: true });
+    correctSlug(before.dashboardInfo.slug, result.slug as string | null, id);
     removedFilterNames.forEach(name =>
       dispatch(addInfoToast(t("Filter '%s' was removed", name))),
     );

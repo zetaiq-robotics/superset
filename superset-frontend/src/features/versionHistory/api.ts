@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the hydration payload carries the dashboard's ETag.
  */
 import { JsonObject, SupersetClient } from '@superset-ui/core';
 import rison from 'rison';
@@ -372,6 +374,8 @@ export async function fetchDashboardHydrationData(
   return {
     dashboard: {
       ...dashboard,
+      // the version the page is then on: a re-hydrate keeps its base right
+      etag: dashboardResponse.response.headers.get('ETag'),
       metadata: dashboard.json_metadata
         ? JSON.parse(dashboard.json_metadata as string)
         : {},
