@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a chart customization save adopts the version it created.
+ * Modified by ZetaIQ: writes count as own writes, so live events wait for them.
  */
 import { AnyAction } from 'redux';
 import { ThunkAction, ThunkDispatch } from 'redux-thunk';
@@ -46,6 +47,7 @@ import {
   SET_IN_SCOPE_STATUS_OF_FILTERS,
 } from './nativeFilters';
 import { SaveFilterChangesType } from '../components/nativeFilters/FiltersConfigModal/types';
+import { trackOwnWrite } from '../live/versionTracker';
 
 const createUpdateChartCustomizationsApi = (id: number) =>
   makeApi<
@@ -106,11 +108,13 @@ export function saveChartCustomization(
     const updateChartCustomizations = createUpdateChartCustomizationsApi(id);
 
     try {
-      const response = await updateChartCustomizations({
-        modified: modifiedItems,
-        deleted: deletedIds,
-        reordered: reorderedIds,
-      });
+      const response = await trackOwnWrite(
+        updateChartCustomizations({
+          modified: modifiedItems,
+          deleted: deletedIds,
+          reordered: reorderedIds,
+        }),
+      );
       // a single-field write: no If-Match, but it moves the version
       dispatch(adoptOwnWrite(id, response));
 

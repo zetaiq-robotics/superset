@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a native filter save adopts the version it created.
+ * Modified by ZetaIQ: writes count as own writes, so live events wait for them.
  */
 import {
   Filter,
@@ -38,6 +39,7 @@ import {
   nativeFiltersConfigChanged,
 } from './dashboardInfo';
 import { SaveFilterChangesType } from '../components/nativeFilters/FiltersConfigModal/types';
+import { trackOwnWrite } from '../live/versionTracker';
 
 export const SET_NATIVE_FILTERS_CONFIG_BEGIN =
   'SET_NATIVE_FILTERS_CONFIG_BEGIN';
@@ -92,7 +94,7 @@ export const setFilterConfiguration =
       endpoint: `/api/v1/dashboard/${id}/filters`,
     });
     try {
-      const response = await updateFilters(filterChanges);
+      const response = await trackOwnWrite(updateFilters(filterChanges));
       // a single-field write: no If-Match, but it moves the version
       dispatch(adoptOwnWrite(id, response));
       // chartsInScope/tabsInScope are derived from the live layout, and the

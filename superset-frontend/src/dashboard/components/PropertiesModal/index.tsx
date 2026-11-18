@@ -18,6 +18,7 @@
  *
  * Modified by ZetaIQ: no Certification section; a typed new tag is created and swapped for its id.
  * Modified by ZetaIQ: a save sends the loaded version as If-Match; a 412 offers Overwrite.
+ * Modified by ZetaIQ: the save counts as an own write and moves the page's base.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { omit } from 'lodash-es';
@@ -59,11 +60,16 @@ import {
   setDashboardMetadata,
 } from 'src/dashboard/actions/dashboardState';
 import {
+  adoptOwnWrite,
   dashboardInfoChanged,
   dashboardSaveSucceeded,
 } from 'src/dashboard/actions/dashboardInfo';
 import { areObjectsEqual } from 'src/reduxUtils';
-import { ifMatch, versionOf } from 'src/dashboard/live/versionTracker';
+import {
+  ifMatch,
+  trackOwnWrite,
+  versionOf,
+} from 'src/dashboard/live/versionTracker';
 import {
   dashboardLastSave,
   fetchEtag,
@@ -497,17 +503,21 @@ const PropertiesModal = ({
 
       // `etag`: the loaded version, or for an Overwrite the version saved now
       const put = (etag = loadedEtag.current): Promise<void> =>
-        SupersetClient.put({
-          endpoint: `/api/v1/dashboard/${dashboardId}`,
-          headers: {
-            'Content-Type': 'application/json',
-            ...ifMatch(versionOf(etag)),
-          },
-          body: JSON.stringify(saveData),
-        }).then(
+        trackOwnWrite(
+          SupersetClient.put({
+            endpoint: `/api/v1/dashboard/${dashboardId}`,
+            headers: {
+              'Content-Type': 'application/json',
+              ...ifMatch(versionOf(etag)),
+            },
+            body: JSON.stringify(saveData),
+          }),
+        ).then(
           ({ json }) => {
-            // only a save that landed moves this modal's version
+            // only a save that landed moves this modal's version, and the
+            // page's when it replaced the page's base
             loadedEtag.current = json?.new_version_uuid ?? null;
+            dispatch(adoptOwnWrite(dashboardId, json));
             dispatch(dashboardSaveSucceeded(dashboardId));
             onSubmit(onSubmitProps);
             onHide();

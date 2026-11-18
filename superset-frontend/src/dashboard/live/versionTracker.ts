@@ -57,3 +57,33 @@ export function ifMatch(
 ): Record<string, string> {
   return base ? { 'If-Match': `"${base}"` } : {};
 }
+
+let ownWrites = 0;
+const settledListeners = new Set<() => void>();
+
+/** Writes by this tab in flight; live events are held while above 0. */
+export const ownWritesInFlight = (): number => ownWrites;
+
+/**
+ * Count `write` (a dashboard write by this tab) as in flight until it
+ * settles. The count drops a macrotask later, so the caller's
+ * `adoptOwnWrite`, chained on the same promise, has landed by then.
+ */
+export function trackOwnWrite<T>(write: Promise<T>): Promise<T> {
+  ownWrites += 1;
+  const settle = () =>
+    setTimeout(() => {
+      ownWrites -= 1;
+      if (ownWrites === 0) settledListeners.forEach(listener => listener());
+    }, 0);
+  write.then(settle, settle);
+  return write;
+}
+
+/** Called each time the last in-flight own write settles. */
+export function subscribeOwnWritesSettled(listener: () => void): () => void {
+  settledListeners.add(listener);
+  return () => {
+    settledListeners.delete(listener);
+  };
+}

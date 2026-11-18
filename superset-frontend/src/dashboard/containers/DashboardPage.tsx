@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: keeps the open dashboard live when websockets run in
+ * gateway mode.
  */
 import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
 import { Global } from '@emotion/react';
@@ -51,6 +54,8 @@ import {
 } from 'src/dashboard/components/nativeFilters/FilterBar/keyValue';
 import DashboardContainer from 'src/dashboard/containers/Dashboard';
 import CrudThemeProvider from 'src/components/CrudThemeProvider';
+import getBootstrapData from 'src/utils/getBootstrapData';
+import { useDashboardLive } from 'src/dashboard/live/useDashboardLive';
 import type { DashboardChartStates } from 'src/dashboard/types/chartState';
 
 import { nanoid } from 'nanoid';
@@ -174,6 +179,18 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   const pageTitle =
     (hydratedDashboardId === id ? liveDashboardTitle : undefined) ||
     dashboard_title;
+
+  // Live updates need the gateway's identity on the push socket; cookie
+  // mode stays as upstream ships it.
+  const hydratedUuid = useSelector<RootState, string | undefined>(
+    state => state.dashboardInfo?.uuid,
+  );
+  const conf = getBootstrapData().common?.conf;
+  const liveEnabled =
+    Boolean(conf?.WEBSOCKET_ENABLE) && conf?.WEBSOCKET_AUTH === 'gateway';
+  useDashboardLive(
+    liveEnabled && hydratedDashboardId === id ? (hydratedUuid ?? '') : '',
+  );
 
   // Get CSS from dashboardInfo (unified properties location)
   const css =
