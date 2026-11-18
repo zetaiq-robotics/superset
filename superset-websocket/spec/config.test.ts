@@ -16,18 +16,17 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+// Modified by ZetaIQ: introspection settings replace the JWT settings.
 import { buildConfig } from '../src/config';
 import { expect, test } from 'vitest';
 
 test('buildConfig() builds configuration and applies env var overrides', () => {
   let config = buildConfig();
 
-  expect(config.jwtSecret).toEqual(
-    'test123-test123-test123-test123-test123-test123-test123',
+  expect(config.introspectUrl).toEqual(
+    'http://control-plane.test/internal/v1/auth/introspect',
   );
-  expect(config.previousJwtSecret).toEqual(
-    'old123-old123-old123-old123-old123-old123-old123',
-  );
+  expect(config.maxSocketsPerPerson).toEqual(20);
   expect(config.redis.host).toEqual('127.0.0.1');
   expect(config.redis.port).toEqual(6379);
   expect(config.redis.password).toEqual('some pwd');
@@ -42,8 +41,9 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   expect(config.statsd.globalTags).toEqual([]);
   expect(config.realtimeChannelPrefix).toEqual('');
 
-  process.env.JWT_SECRET = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  process.env.PREVIOUS_JWT_SECRET = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  process.env.INTROSPECT_URL = 'http://cp:8081/internal/v1/auth/introspect';
+  process.env.INTROSPECT_INTERVAL_MS = '30000';
+  process.env.MAX_SOCKETS_PER_PERSON = '5';
   process.env.REDIS_HOST = '10.10.10.10';
   process.env.REDIS_PORT = '6380';
   process.env.REDIS_PASSWORD = 'admin';
@@ -65,8 +65,11 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
 
   config = buildConfig();
 
-  expect(config.jwtSecret).toEqual('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
-  expect(config.previousJwtSecret).toEqual('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  expect(config.introspectUrl).toEqual(
+    'http://cp:8081/internal/v1/auth/introspect',
+  );
+  expect(config.introspectIntervalMs).toEqual(30000);
+  expect(config.maxSocketsPerPerson).toEqual(5);
   expect(config.redis.host).toEqual('10.10.10.10');
   expect(config.redis.port).toEqual(6380);
   expect(config.redis.password).toEqual('admin');
@@ -89,8 +92,9 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   expect(config.statsd.globalTags).toEqual(['tag-1', 'tag-2']);
   expect(config.realtimeChannelPrefix).toEqual('tenant-a:');
 
-  delete process.env.JWT_SECRET;
-  delete process.env.PREVIOUS_JWT_SECRET;
+  delete process.env.INTROSPECT_URL;
+  delete process.env.INTROSPECT_INTERVAL_MS;
+  delete process.env.MAX_SOCKETS_PER_PERSON;
   delete process.env.REDIS_HOST;
   delete process.env.REDIS_PORT;
   delete process.env.REDIS_PASSWORD;
@@ -145,4 +149,18 @@ test('buildConfig() falls back to the default for an invalid REDIS_SSL_CERT_REQS
   expect(buildConfig().redis.sslCertReqs).toEqual('required');
 
   delete process.env.REDIS_SSL_CERT_REQS;
+});
+
+test('buildConfig() keeps the re-introspection interval at 5 s or more', () => {
+  for (const [val, want] of [
+    ['0', 5000],
+    ['1000', 5000],
+    ['5000', 5000],
+    ['90000', 90000],
+  ] as const) {
+    process.env.INTROSPECT_INTERVAL_MS = val;
+    expect(buildConfig().introspectIntervalMs).toEqual(want);
+  }
+
+  delete process.env.INTROSPECT_INTERVAL_MS;
 });

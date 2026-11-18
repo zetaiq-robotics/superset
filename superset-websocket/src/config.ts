@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+// Modified by ZetaIQ: introspection settings and live-dashboard limits replace the JWT settings.
 
 import { readFileSync } from 'fs';
 import { merge as _merge } from 'lodash-es';
@@ -65,10 +66,10 @@ type ConfigType = {
     globalTags: Array<string>;
   };
   redis: RedisConfig;
-  jwtAlgorithms: string[];
-  jwtSecret: string;
-  previousJwtSecret: string;
-  jwtCookieName: string;
+  // Full URL of the control plane's token introspection endpoint.
+  introspectUrl: string;
+  introspectIntervalMs: number;
+  maxSocketsPerPerson: number;
   realtimeChannelPrefix: string;
   allowedOrigins: string[];
   socketResponseTimeoutMs: number;
@@ -85,21 +86,20 @@ function defaultConfig(): ConfigType {
     logLevel: 'info',
     logToFile: false,
     logFilename: 'app.log',
-    jwtAlgorithms: ['HS256'],
-    jwtSecret: '',
-    previousJwtSecret: '',
-    jwtCookieName: 'superset-ws-token',
+    introspectUrl: '',
+    introspectIntervalMs: 60 * 1000,
     realtimeChannelPrefix: '',
     allowedOrigins: [],
     socketResponseTimeoutMs: 60 * 1000,
     pingSocketsIntervalMs: 20 * 1000,
     gcChannelsIntervalMs: 120 * 1000,
-    // 0 disables the per-socket send-buffer cap; set a positive byte value to
-    // opt in to terminating clients whose outbound buffer grows beyond it.
-    maxSocketBufferBytes: 0,
-    // 0 disables the limit (unlimited); set a positive value to opt in.
+    // A client whose outbound buffer would grow past this is terminated (a tab
+    // that stops reading is cut). 0 disables the cap.
+    maxSocketBufferBytes: 1024 * 1024,
+    // 0 disables a limit (unlimited).
     maxConnectionsPerChannel: 0,
-    maxTotalConnections: 0,
+    maxSocketsPerPerson: 20,
+    maxTotalConnections: 10000,
     statsd: {
       host: '127.0.0.1',
       port: 8125,
@@ -208,9 +208,17 @@ function applyEnvOverrides(config: ConfigType): ConfigType {
     LOG_LEVEL: val => (config.logLevel = val),
     LOG_TO_FILE: val => (config.logToFile = toBoolean(val)),
     LOG_FILENAME: val => (config.logFilename = val),
-    JWT_SECRET: val => (config.jwtSecret = val),
-    PREVIOUS_JWT_SECRET: val => (config.previousJwtSecret = val),
-    JWT_COOKIE_NAME: val => (config.jwtCookieName = val),
+    INTROSPECT_URL: val => (config.introspectUrl = val),
+    INTROSPECT_INTERVAL_MS: val =>
+      (config.introspectIntervalMs = toNonNegativeNumber(
+        val,
+        config.introspectIntervalMs,
+      )),
+    MAX_SOCKETS_PER_PERSON: val =>
+      (config.maxSocketsPerPerson = toNonNegativeNumber(
+        val,
+        config.maxSocketsPerPerson,
+      )),
     REALTIME_CHANNEL_PREFIX: val => (config.realtimeChannelPrefix = val),
     ALLOWED_ORIGINS: val => (config.allowedOrigins = toStringArray(val)),
     SOCKET_RESPONSE_TIMEOUT_MS: val =>
@@ -277,7 +285,15 @@ function applyEnvOverrides(config: ConfigType): ConfigType {
   return config;
 }
 
+// Floor for the re-introspection interval: 0 or a tiny value would loop
+// against the control plane.
+const MIN_INTROSPECT_INTERVAL_MS = 5000;
+
 export function buildConfig(): ConfigType {
-  const config = _merge(defaultConfig(), configFromFile());
-  return applyEnvOverrides(config);
+  const config = applyEnvOverrides(_merge(defaultConfig(), configFromFile()));
+  config.introspectIntervalMs = Math.max(
+    MIN_INTROSPECT_INTERVAL_MS,
+    config.introspectIntervalMs,
+  );
+  return config;
 }

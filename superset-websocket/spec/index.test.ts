@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+// Modified by ZetaIQ: identity tests use the gateway's introspected token instead of the JWT cookie.
 
-import jwt from 'jsonwebtoken';
-import config from '../config.test.json' with { type: 'json' };
 import {
   describe,
   expect,
@@ -37,6 +36,7 @@ import { ConnectionOptions, rootCertificates } from 'tls';
 import { WebSocket } from 'ws';
 import * as server from '../src/index';
 import type { RedisConfig } from '../src/config';
+import type { GatewayIdentity } from '../src/gatewayAuth';
 import { statsd } from '../src/index';
 
 const { mockSubscribe, mockOn } = vi.hoisted(() => {
@@ -53,32 +53,25 @@ vi.mock('ioredis', () => {
 });
 
 const wsMock = WebSocket as unknown as Mock<typeof WebSocket>;
-const channelId = 'user:5';
+const channelId = 't:acme:p:5';
+const token = 'dlg_test-token';
 
-// An override of `undefined` means "this claim is absent" - the key is dropped
-// rather than signed as undefined, which `jsonwebtoken` rejects outright for
-// registered claims such as `exp`.
-const realtimeClaims = (overrides: Record<string, unknown> = {}) =>
-  Object.fromEntries(
-    Object.entries({
-      channel: channelId,
-      sub: '5',
-      principal_type: 'user',
-      aud: 'superset-websocket',
-      iss: 'superset',
-      exp: Math.floor(Date.now() / 1000) + 3600,
-      ...overrides,
-    }).filter(([, value]) => value !== undefined),
+/** The control plane's answer for `token`: tenant acme, person 5. */
+const introspectionAnswer = (status = 200) =>
+  new Response(
+    status === 200
+      ? JSON.stringify({
+          org_user_id: '5',
+          tenant_id: 'acme',
+          expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+        })
+      : null,
+    { status },
   );
 
-const signRealtimeToken = (
-  overrides: Record<string, unknown> = {},
-  secret = config.jwtSecret,
-) => jwt.sign(realtimeClaims(overrides), secret);
-
 /**
- * Build an upgrade-shaped HTTP request, optionally carrying the JWT cookie and
- * an `Origin` header.
+ * Build an upgrade-shaped HTTP request, optionally carrying the gateway's
+ * bearer token and an `Origin` header.
  */
 const makeRequest = ({
   token,
@@ -92,7 +85,7 @@ const makeRequest = ({
   const request = new http.IncomingMessage(new net.Socket());
   request.method = 'GET';
   request.url = url;
-  if (token) request.headers.cookie = `${config.jwtCookieName}=${token}`;
+  if (token) request.headers.authorization = `Bearer ${token}`;
   if (origin) request.headers.origin = origin;
   return request;
 };
@@ -100,16 +93,14 @@ const makeRequest = ({
 /** The identity a socket on `channel` would have proven at upgrade time. */
 const makeIdentity = (
   channel: string,
-  tokenExpiresAtMs = Date.now() + 3600 * 1000,
-): server.SocketIdentity =>
-  channel.startsWith('guest:')
-    ? { channel, principalType: 'guest', subject: channel, tokenExpiresAtMs }
-    : {
-        channel,
-        principalType: 'user',
-        subject: channel.replace('user:', ''),
-        tokenExpiresAtMs,
-      };
+  expiresAtMs = Date.now() + 3600 * 1000,
+): GatewayIdentity => ({
+  tenant: 'acme',
+  person: channel.split(':p:')[1] ?? channel,
+  expiresAtMs,
+  token,
+  channel,
+});
 
 /** Register an already-authenticated socket on `channel`. */
 const trackSocket = (
@@ -125,19 +116,30 @@ const trackSocket = (
     ...overrides,
   });
 
-/** Run the full accept path for `token`: verify at upgrade, then connect. */
-const connect = (ws: WebSocket, token: string) =>
-  server.wsConnection(ws, server.readSocketIdentity(makeRequest({ token })));
+/** Run the accept path for an identity introspected at upgrade. */
+const connect = (ws: WebSocket) =>
+  server.wsConnection(ws, makeIdentity(channelId));
 
 describe('server', () => {
   let statsdIncrementMock: Mock<typeof statsd.increment>;
 
   beforeEach(() => {
+    // Accepted sockets schedule re-introspection timers; keep them fake so none
+    // fires into a later test.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     server.resetState();
     statsdIncrementMock = vi.spyOn(statsd, 'increment').mockReturnValue();
+    // Every introspection (at upgrade, and the per-socket re-checks) answers
+    // for `token` unless a test says otherwise.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => introspectionAnswer()),
+    );
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     statsdIncrementMock.mockRestore();
   });
 
@@ -458,87 +460,6 @@ describe('server', () => {
     });
   });
 
-  describe('principalChannel', () => {
-    test('derives the routing key for each principal type', () => {
-      expect(server.principalChannel('user', '5')).toEqual('user:5');
-      expect(server.principalChannel('guest', 'guest:abc')).toEqual(
-        'guest:abc',
-      );
-    });
-
-    test('rejects an identity that names no routable channel', () => {
-      // A guest key is namespaced by the backend; an unprefixed subject could
-      // otherwise collide with another principal's channel.
-      expect(server.principalChannel('guest', 'abc')).toBeNull();
-      expect(server.principalChannel('user', '')).toBeNull();
-      expect(server.principalChannel('guest', '')).toBeNull();
-    });
-  });
-
-  describe('readSocketIdentity', () => {
-    test('extracts the identity a valid token proves', () => {
-      const token = signRealtimeToken();
-
-      expect(server.readSocketIdentity(makeRequest({ token }))).toEqual({
-        channel: channelId,
-        principalType: 'user',
-        subject: '5',
-        tokenExpiresAtMs: expect.any(Number),
-      });
-    });
-
-    test('accepts a token signed with the previous secret', () => {
-      const token = signRealtimeToken({}, config.previousJwtSecret);
-
-      expect(server.readSocketIdentity(makeRequest({ token })).channel).toEqual(
-        channelId,
-      );
-    });
-
-    test('rejects a request with no JWT cookie', () => {
-      expect(() => server.readSocketIdentity(makeRequest())).toThrow(
-        'JWT not present',
-      );
-    });
-
-    test.each([
-      ['a token signed with an unknown secret', {}, 'invalid secret'],
-      ['an expired token', { exp: Math.floor(Date.now() / 1000) - 1 }],
-      ['a token for another audience', { aud: 'someone-else' }],
-      ['a token from another issuer', { iss: 'not-superset' }],
-      ['a token with no channel claim', { channel: undefined }],
-      ['a token with no subject', { sub: undefined }],
-      ['a token with no expiration', { exp: undefined }],
-      ['a token with no principal type', { principal_type: undefined }],
-      ['a token with an unknown principal type', { principal_type: 'robot' }],
-      [
-        'a user whose channel does not match its subject',
-        { channel: 'user:6' },
-      ],
-      [
-        'a guest whose channel does not match its subject',
-        { channel: 'guest:abc', sub: 'guest:def', principal_type: 'guest' },
-      ],
-      [
-        'a guest subject that is not namespaced',
-        { channel: 'abc', sub: 'abc', principal_type: 'guest' },
-      ],
-    ])(
-      'rejects %s',
-      (
-        _description: string,
-        overrides: Record<string, unknown>,
-        secret: string = config.jwtSecret,
-      ) => {
-        const token = signRealtimeToken(overrides, secret);
-
-        expect(() =>
-          server.readSocketIdentity(makeRequest({ token })),
-        ).toThrow();
-      },
-    );
-  });
-
   describe('routeRedisMessage', () => {
     const taskStatus = (routes: string[], scope = 'tab') =>
       JSON.stringify({
@@ -815,12 +736,7 @@ describe('server', () => {
       socketInstanceExpected = {
         ws,
         channel: channelId,
-        identity: {
-          channel: channelId,
-          principalType: 'user',
-          subject: '5',
-          tokenExpiresAtMs: 1615377718000,
-        },
+        identity: makeIdentity(channelId),
         pongTs: 1615374118135,
       };
     });
@@ -830,8 +746,8 @@ describe('server', () => {
       dateNowSpy?.mockRestore();
     });
 
-    test('valid JWT binds the socket to its channel', async () => {
-      connect(ws, signRealtimeToken());
+    test('an introspected identity binds the socket to its channel', async () => {
+      connect(ws);
 
       const channelSockets = server.channels[channelId];
       expect(channelSockets).toEqual({
@@ -841,27 +757,6 @@ describe('server', () => {
       const socketId = channelSockets.sockets[0];
       expect(server.sockets[socketId]).toEqual(socketInstanceExpected);
       expect(wsEventMock).toHaveBeenCalledWith('pong', expect.any(Function));
-    });
-
-    test('valid guest JWT binds the socket to its guest channel', async () => {
-      const guestChannelId = 'guest:abc';
-      connect(
-        ws,
-        signRealtimeToken({
-          channel: guestChannelId,
-          sub: guestChannelId,
-          principal_type: 'guest',
-        }),
-      );
-
-      const channelSockets = server.channels[guestChannelId];
-      expect(channelSockets.sockets).toHaveLength(1);
-      const socketId = channelSockets.sockets[0];
-      expect(server.sockets[socketId].identity).toMatchObject({
-        channel: guestChannelId,
-        principalType: 'guest',
-        subject: guestChannelId,
-      });
     });
 
     test('a tab_id also binds the socket to its per-tab channel', async () => {
@@ -878,7 +773,7 @@ describe('server', () => {
     });
 
     test('unsolicited pong payload cannot pollute Object.prototype', async () => {
-      connect(ws, signRealtimeToken());
+      connect(ws);
 
       // Extract the handler registered for the 'pong' event, the same way
       // the underlying `ws` library would invoke it on a raw pong frame.
@@ -1007,7 +902,7 @@ describe('server', () => {
 
       const trackClientSpy = vi.spyOn(server, 'trackClient');
       const ws = new wsMock('localhost');
-      connect(ws, signRealtimeToken());
+      connect(ws);
 
       expect(ws.close).toHaveBeenCalledWith(
         1013,
@@ -1033,10 +928,8 @@ describe('server', () => {
       wssUpgradeSpy.mockRestore();
     });
 
-    test('invalid JWT', async () => {
-      const token = signRealtimeToken({}, 'invalid secret');
-
-      server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
+    test('no bearer token', async () => {
+      await server.httpUpgrade(makeRequest(), socket, Buffer.alloc(5));
 
       expect(socketDestroySpy).toHaveBeenCalled();
       expect(wssUpgradeSpy).not.toHaveBeenCalled();
@@ -1044,54 +937,33 @@ describe('server', () => {
       expect(statsdIncrementMock).toHaveBeenCalledWith('ws_upgrade_rejected');
     });
 
-    test('valid JWT, no channel', async () => {
-      const token = signRealtimeToken({ channel: undefined });
-
-      server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
-
-      expect(socketDestroySpy).toHaveBeenCalled();
-      expect(wssUpgradeSpy).not.toHaveBeenCalled();
-    });
-
     test('valid upgrade', async () => {
-      const token = signRealtimeToken();
-
-      server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
+      await server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
 
       expect(socketDestroySpy).not.toHaveBeenCalled();
       expect(wssUpgradeSpy).toHaveBeenCalled();
     });
 
-    test('valid upgrade with previous JWT secret', async () => {
-      const token = signRealtimeToken({}, config.previousJwtSecret);
-
-      server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
-
-      expect(socketDestroySpy).not.toHaveBeenCalled();
-      expect(wssUpgradeSpy).toHaveBeenCalled();
-    });
-
-    test('an accepted upgrade tracks the socket without re-verifying the JWT', async () => {
-      const token = signRealtimeToken();
+    test('an accepted upgrade tracks the socket without re-introspecting', async () => {
       const ws = new wsMock('localhost');
       // Hand the upgrade callback a socket, as the real handshake would, but
-      // strip the cookie from the request first: the identity must already have
-      // been carried over from the single upgrade-time verification.
+      // strip the bearer from the request first: the identity must already have
+      // been carried over from the single upgrade-time introspection.
       const request = makeRequest({ token });
       wssUpgradeSpy.mockImplementation(
         (_request, _socket, _head, callback: (ws: WebSocket) => void) => {
-          request.headers.cookie = '';
+          request.headers.authorization = '';
           callback(ws);
         },
       );
 
-      server.httpUpgrade(request, socket, Buffer.alloc(5));
+      await server.httpUpgrade(request, socket, Buffer.alloc(5));
 
       expect(server.channels[channelId].sockets).toHaveLength(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
 
     test('an accepted upgrade binds the per-tab channel from ?tab_id', async () => {
-      const token = signRealtimeToken();
       const ws = new wsMock('localhost');
       const request = makeRequest({
         token,
@@ -1103,7 +975,7 @@ describe('server', () => {
         },
       );
 
-      server.httpUpgrade(request, socket, Buffer.alloc(5));
+      await server.httpUpgrade(request, socket, Buffer.alloc(5));
 
       expect(server.channels[channelId].sockets).toHaveLength(1);
       expect(server.channels[`${channelId}:tabA`].sockets).toEqual(
@@ -1114,7 +986,6 @@ describe('server', () => {
     test('an accepted upgrade ignores an invalid ?tab_id', async () => {
       // A tab id outside the allowed length/charset must not become a channel
       // key; the socket falls back to principal-grain (no per-tab channel).
-      const token = signRealtimeToken();
       const ws = new wsMock('localhost');
       const badTabId = 'a'.repeat(65);
       const request = makeRequest({
@@ -1127,7 +998,7 @@ describe('server', () => {
         },
       );
 
-      server.httpUpgrade(request, socket, Buffer.alloc(5));
+      await server.httpUpgrade(request, socket, Buffer.alloc(5));
 
       expect(server.channels[channelId].sockets).toHaveLength(1);
       expect(server.channels[`${channelId}:${badTabId}`]).toBeUndefined();
@@ -1138,11 +1009,10 @@ describe('server', () => {
         server.opts.allowedOrigins = [];
       });
 
-      test('rejects upgrade from a disallowed origin', () => {
+      test('rejects upgrade from a disallowed origin', async () => {
         server.opts.allowedOrigins = ['https://superset.example.com'];
-        const token = signRealtimeToken();
 
-        server.httpUpgrade(
+        await server.httpUpgrade(
           makeRequest({ token, origin: 'https://evil.example' }),
           socket,
           Buffer.alloc(5),
@@ -1152,21 +1022,23 @@ describe('server', () => {
         expect(wssUpgradeSpy).not.toHaveBeenCalled();
       });
 
-      test('rejects upgrade with no origin when an allowlist is set', () => {
+      test('rejects upgrade with no origin when an allowlist is set', async () => {
         server.opts.allowedOrigins = ['https://superset.example.com'];
-        const token = signRealtimeToken();
 
-        server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
+        await server.httpUpgrade(
+          makeRequest({ token }),
+          socket,
+          Buffer.alloc(5),
+        );
 
         expect(socketDestroySpy).toHaveBeenCalled();
         expect(wssUpgradeSpy).not.toHaveBeenCalled();
       });
 
-      test('allows upgrade from an allowed origin', () => {
+      test('allows upgrade from an allowed origin', async () => {
         server.opts.allowedOrigins = ['https://superset.example.com'];
-        const token = signRealtimeToken();
 
-        server.httpUpgrade(
+        await server.httpUpgrade(
           makeRequest({ token, origin: 'https://superset.example.com' }),
           socket,
           Buffer.alloc(5),
@@ -1203,18 +1075,14 @@ describe('server', () => {
       expect(closeSpy).not.toHaveBeenCalled();
     });
 
-    test('httpUpgrade is refused with 503 while the subscriber is unhealthy', () => {
+    test('httpUpgrade is refused with 503 while the subscriber is unhealthy', async () => {
       server.markSubscriberUnhealthy('test drop');
       const socket = new net.Socket();
       const destroySpy = vi.spyOn(socket, 'destroy');
       const writeSpy = vi.spyOn(socket, 'write');
       const upgradeSpy = vi.spyOn(server.wss, 'handleUpgrade');
 
-      server.httpUpgrade(
-        makeRequest({ token: signRealtimeToken() }),
-        socket,
-        Buffer.alloc(5),
-      );
+      await server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
 
       expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('503'));
       expect(destroySpy).toHaveBeenCalled();
@@ -1223,7 +1091,7 @@ describe('server', () => {
       upgradeSpy.mockRestore();
     });
 
-    test('markSubscriberHealthy restores the transport so upgrades proceed', () => {
+    test('markSubscriberHealthy restores the transport so upgrades proceed', async () => {
       server.markSubscriberUnhealthy('test drop');
       server.markSubscriberHealthy();
 
@@ -1231,11 +1099,7 @@ describe('server', () => {
       const destroySpy = vi.spyOn(socket, 'destroy');
       const upgradeSpy = vi.spyOn(server.wss, 'handleUpgrade');
 
-      server.httpUpgrade(
-        makeRequest({ token: signRealtimeToken() }),
-        socket,
-        Buffer.alloc(5),
-      );
+      await server.httpUpgrade(makeRequest({ token }), socket, Buffer.alloc(5));
 
       expect(destroySpy).not.toHaveBeenCalled();
       expect(upgradeSpy).toHaveBeenCalled();
@@ -1301,7 +1165,7 @@ describe('server', () => {
       expect(Object.keys(server.sockets).length).toBe(1);
     });
 
-    test('sockets with expired JWTs are terminated', () => {
+    test('sockets with expired tokens are terminated', () => {
       vi.spyOn(ws, 'readyState', 'get').mockReturnValue(WebSocket.OPEN);
       trackSocket(channelId, ws, {
         identity: makeIdentity(channelId, Date.now() - 1),

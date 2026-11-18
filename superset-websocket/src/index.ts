@@ -16,22 +16,26 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+// Modified by ZetaIQ: identity from the gateway's delegated token (introspection) replaces the JWT cookie; per-person cap, SIGTERM close.
 import * as http from 'http';
 import * as net from 'net';
 import { readFileSync } from 'fs';
 import { inspect } from 'util';
 import { WebSocket, WebSocketServer } from 'ws';
 import { randomUUID } from 'crypto';
-import jwt, {
-  type Algorithm,
-  type JwtPayload as JsonWebTokenPayload,
-} from 'jsonwebtoken';
-import { parseCookie } from 'cookie';
 import { Redis, RedisOptions } from 'ioredis';
 import StatsD from 'hot-shots';
 
 import { createLogger } from './logger.js';
 import { buildConfig, RedisConfig } from './config.js';
+import {
+  GatewayIdentity,
+  IdentityRefused,
+  IdentityUnavailable,
+  REFUSED_CLOSE_CODE,
+  identityFromRequest,
+  watchIdentity,
+} from './gatewayAuth.js';
 import {
   checkServerIdentity,
   ConnectionOptions,
@@ -39,29 +43,9 @@ import {
   rootCertificates,
 } from 'tls';
 
-const REALTIME_JWT_AUDIENCE = 'superset-websocket';
-const REALTIME_JWT_ISSUER = 'superset';
-const PRINCIPAL_TYPES = ['user', 'guest'] as const;
-type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
-
-const isPrincipalType = (value: unknown): value is PrincipalType =>
-  typeof value === 'string' && PRINCIPAL_TYPES.some(type => type === value);
-
-/**
- * The claims this server reads out of a realtime JWT, beyond the registered ones
- * (`sub`, `exp`, `aud`, `iss`) that `jsonwebtoken` already types. The claim names
- * are fixed rather than configurable: the Flask app mints them unconditionally
- * (superset/websocket/channel.py) with no counterpart setting to rename them, so
- * an override on this side could only ever break the pairing.
- */
-interface RealtimeJwtPayload extends JsonWebTokenPayload {
-  channel?: unknown;
-  principal_type?: unknown;
-}
-
 /**
  * The generic envelope the server forwards to browsers. Every connected socket
- * has a valid realtime JWT. A browser client dispatches on `topic` (the semantic
+ * has an introspected gateway token. A browser client dispatches on `topic` (the semantic
  * stream), never on the route it arrived by:
  *   - `entity.changed` - a lossy "an entity changed" nudge broadcast to every
  *     authenticated socket; `payload` carries opaque ids only (`{entity_type, id}`).
@@ -88,20 +72,13 @@ interface RealtimeEnvelope {
   payload: unknown;
 }
 
-export interface SocketIdentity {
-  channel: string;
-  principalType: PrincipalType;
-  subject: string;
-  tokenExpiresAtMs: number;
-}
-
 export interface SocketInstance {
   ws: WebSocket;
   channel: string;
   // Additional per-tab channel the socket is also registered under, when the
   // browser advertised a `tab_id` at connect (`<channel>:<tabId>`).
   tabChannel?: string;
-  identity: SocketIdentity;
+  identity: GatewayIdentity;
   pongTs: number;
 }
 
@@ -115,7 +92,7 @@ const startServer = process.argv[2] === 'start';
 
 export const opts = buildConfig();
 
-const logger = createLogger({
+export const logger = createLogger({
   silent: environment === 'test',
   logLevel: opts.logLevel,
   logToFile: opts.logToFile,
@@ -129,27 +106,9 @@ export const statsd = new StatsD({
   },
 });
 
-const validateConfiguredJwtSecret = (
-  secret: string,
-  name: string,
-  required = false,
-) => {
-  if (!secret && !required) return;
-  if (secret.length < 32) {
-    logger.error(`Please provide a ${name} at least 32 bytes long`);
-    process.exit(1);
-  }
-  if (secret.startsWith('CHANGE-ME')) {
-    logger.warn(
-      `It appears your ${name} in your config.json is insecure. ` +
-        'DO NOT USE IN PRODUCTION',
-    );
-  }
-};
-
-if (startServer) {
-  validateConfiguredJwtSecret(opts.jwtSecret, 'JWT secret', true);
-  validateConfiguredJwtSecret(opts.previousJwtSecret, 'previous JWT secret');
+if (startServer && !opts.introspectUrl) {
+  logger.error('Please provide introspectUrl (INTROSPECT_URL)');
+  process.exit(1);
 }
 
 const readPem = (path: string): string => readFileSync(path, 'utf8');
@@ -290,6 +249,8 @@ const CONNECTION_LIMIT_CLOSE_CODE = 1013;
 // liveness probe — coupling it to a transient Redis blip would churn pods.)
 const SUBSCRIBER_UNHEALTHY_CLOSE_CODE = 1012;
 export let subscriberHealthy = false;
+// Set by SIGTERM: no upgrade is admitted after it.
+let shuttingDown = false;
 
 export const markSubscriberHealthy = (): void => {
   if (subscriberHealthy) return;
@@ -304,20 +265,35 @@ export const markSubscriberUnhealthy = (reason: string): void => {
     `Redis subscriber unhealthy (${reason}); refusing upgrades and closing ` +
       `sockets so clients reconnect and catch up`,
   );
+  closeAllSockets(
+    SUBSCRIBER_UNHEALTHY_CLOSE_CODE,
+    'realtime backend unavailable',
+  );
+};
+
+function closeAllSockets(code: number, reason: string): void {
   // Snapshot ids first: ws.close triggers the 'close' handler, which deletes from
   // `sockets` — mutating the object mid-iteration.
   Object.keys(sockets).forEach(socketId => {
     try {
-      sockets[socketId]?.ws.close(
-        SUBSCRIBER_UNHEALTHY_CLOSE_CODE,
-        'realtime backend unavailable',
-      );
+      sockets[socketId]?.ws.close(code, reason);
     } catch (err) {
-      logger.error(
-        `Failed to close socket ${socketId} on subscriber loss: ${err}`,
-      );
+      logger.error(`Failed to close socket ${socketId} (${reason}): ${err}`);
     }
   });
+}
+
+// Grace between the 1012 close frames and exit, so they reach the clients.
+const SHUTDOWN_GRACE_MS = 1000;
+
+/** SIGTERM: close every socket `1012` so clients reconnect promptly, then exit. */
+export const shutdown = (): void => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info('SIGTERM: closing every socket with 1012');
+  httpServer.close();
+  closeAllSockets(SUBSCRIBER_UNHEALTHY_CLOSE_CODE, 'server restart');
+  setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS);
 };
 
 // A dropped/ended subscriber connection means missed messages; ioredis
@@ -367,10 +343,19 @@ export const activeChannelSocketCount = (channel: string): number =>
  * connection is consuming capacity.
  */
 export const connectionLimitReason = (channel: string): string | null => {
-  const { maxTotalConnections, maxConnectionsPerChannel } = opts;
+  const { maxTotalConnections, maxConnectionsPerChannel, maxSocketsPerPerson } =
+    opts;
 
   if (maxTotalConnections > 0 && activeSocketCount() >= maxTotalConnections) {
     return `total connection limit (${maxTotalConnections}) reached`;
+  }
+
+  // The channel is the person's own (`t:<tenant>:p:<person>`).
+  if (
+    maxSocketsPerPerson > 0 &&
+    activeChannelSocketCount(channel) >= maxSocketsPerPerson
+  ) {
+    return `per-person socket limit (${maxSocketsPerPerson}) reached`;
   }
 
   if (
@@ -420,13 +405,14 @@ const sendToSocket = (
     if (cleanupChannel) cleanChannel(cleanupChannel);
     return false;
   }
-  // Backpressure: if a slow or stalled client has let its outbound buffer
-  // grow past the configured cap, terminate it rather than buffering
-  // unbounded data in server memory. Opt-in: a cap of 0 disables the check.
+  // Backpressure: if this send would grow a slow or stalled client's outbound
+  // buffer past the configured cap, terminate it rather than buffering
+  // unbounded data in server memory. A cap of 0 disables the check.
   const { maxSocketBufferBytes } = opts;
   if (
     maxSocketBufferBytes > 0 &&
-    socketInstance.ws.bufferedAmount > maxSocketBufferBytes
+    socketInstance.ws.bufferedAmount + Buffer.byteLength(strData) >
+      maxSocketBufferBytes
   ) {
     statsd.increment('ws_client_backpressure_disconnect');
     logger.warn(
@@ -533,26 +519,6 @@ function parseRealtimeEnvelope(payload: unknown): RealtimeEnvelope | null {
 }
 
 /**
- * Derive a principal's socket routing key, or `null` when the identity does not
- * name one. Mirrors the backend's single source of truth (`channel_id_for` in
- * superset/websocket/channel.py): `user:<id>` for an authenticated user, and the
- * guest's already-namespaced `guest:<hmac>` key for an embedded guest.
- *
- * Both directions go through this one function so an accepted socket and an
- * outbound fanout can never disagree on the key: it derives the channel a
- * connecting socket's JWT must claim, and the channel a task-status subscriber
- * is routed to.
- */
-export const principalChannel = (
-  principalType: PrincipalType,
-  subject: string,
-): string | null => {
-  if (subject.length === 0) return null;
-  if (principalType === 'user') return `user:${subject}`;
-  return subject.startsWith('guest:') ? subject : null;
-};
-
-/**
  * Routes a raw Redis Pub/Sub message to the appropriate sockets by its envelope
  * scope, forwarding the browser-facing `{topic, payload}` (the server-side
  * `routes` are stripped). An `authenticated_global` message is broadcast to every
@@ -644,85 +610,12 @@ redisSubscriber.on('ready', () => {
 });
 
 /**
- * Verify and parse a realtime JWT cookie from an HTTP request.
- */
-const verifyRealtimeJwt = (token: string): RealtimeJwtPayload => {
-  let lastError: unknown;
-  const acceptedSecrets = [opts.jwtSecret, opts.previousJwtSecret].filter(
-    secret => secret.length > 0,
-  );
-
-  for (const secret of acceptedSecrets) {
-    try {
-      return jwt.verify(token, secret, {
-        algorithms: opts.jwtAlgorithms as Algorithm[],
-        audience: REALTIME_JWT_AUDIENCE,
-        complete: false,
-        issuer: REALTIME_JWT_ISSUER,
-      }) as RealtimeJwtPayload;
-    } catch (err) {
-      lastError = err;
-    }
-  }
-
-  if (lastError instanceof Error) throw lastError;
-  throw new Error('JWT verification failed');
-};
-
-/**
- * Verify a realtime JWT cookie on an HTTP request and extract the socket
- * identity it proves. Throws when the token is absent, unverifiable, or its
- * claims do not describe a routable principal.
- */
-export const readSocketIdentity = (
-  request: http.IncomingMessage,
-): SocketIdentity => {
-  const cookies = parseCookie(request.headers.cookie || '');
-  const token = cookies[opts.jwtCookieName];
-
-  if (!token) throw new Error('JWT not present');
-  const jwtPayload = verifyRealtimeJwt(token);
-  const channelId = jwtPayload.channel;
-  const subject = jwtPayload.sub;
-  const principalType = jwtPayload.principal_type;
-  const expiresAtSeconds = jwtPayload.exp;
-
-  if (typeof channelId !== 'string' || channelId.length === 0) {
-    throw new Error('Channel ID not present in JWT');
-  }
-  if (typeof subject !== 'string' || subject.length === 0) {
-    throw new Error('Subject not present in JWT');
-  }
-  if (!isPrincipalType(principalType)) {
-    throw new Error('Principal type not present in JWT');
-  }
-  if (channelId !== principalChannel(principalType, subject)) {
-    throw new Error('Channel does not match JWT subject');
-  }
-  if (typeof expiresAtSeconds !== 'number') {
-    throw new Error('Expiration not present in JWT');
-  }
-  const tokenExpiresAtMs = expiresAtSeconds * 1000;
-  if (!Number.isFinite(tokenExpiresAtMs)) {
-    throw new Error('Invalid JWT expiration');
-  }
-
-  return {
-    channel: channelId,
-    principalType,
-    subject,
-    tokenExpiresAtMs,
-  };
-};
-
-/**
- * WebSocket `connection` event handler. `identity` is the one already verified
- * during the HTTP upgrade (see `httpUpgrade`), so each connection's JWT is
- * verified exactly once.
+ * WebSocket `connection` event handler. `identity` is the one introspected
+ * during the HTTP upgrade (see `httpUpgrade`); `watchIdentity` re-checks it.
  */
 export const wsConnection = (
   ws: WebSocket,
-  identity: SocketIdentity,
+  identity: GatewayIdentity,
   tabId?: string,
 ) => {
   const { channel } = identity;
@@ -762,6 +655,7 @@ export const wsConnection = (
   if (tabChannel) {
     (channels[tabChannel] ??= { sockets: [] }).sockets.push(socketId);
   }
+  watchIdentity(ws, identity);
   logger.debug(
     `socket ${socketId} connected on channel ${channel}` +
       (tabChannel ? ` (tab channel ${tabChannel})` : ''),
@@ -848,11 +742,11 @@ export const isOriginAllowed = (request: http.IncomingMessage): boolean => {
 /**
  * HTTP `upgrade` event handler, called via httpServer
  */
-export const httpUpgrade = (
+export const httpUpgrade = async (
   request: http.IncomingMessage,
   socket: net.Socket,
   head: Buffer,
-) => {
+): Promise<void> => {
   if (!isOriginAllowed(request)) {
     logger.error(
       `Rejecting WebSocket upgrade from disallowed origin: ${
@@ -867,29 +761,43 @@ export const httpUpgrade = (
   // would silently miss messages until the subscription recovers. Reply 503 so the
   // client backs off and retries (its reconnect then runs the status_changes
   // catch-up against a healthy server).
-  if (!subscriberHealthy) {
+  const unavailable = (why: string) => {
     statsd.increment('ws_upgrade_rejected');
-    logger.warn('Rejecting WebSocket upgrade: Redis subscriber unhealthy');
+    logger.warn(`Rejecting WebSocket upgrade: ${why}`);
     socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
     socket.destroy();
-    return;
-  }
+  };
+  if (!subscriberHealthy) return unavailable('Redis subscriber unhealthy');
+  if (shuttingDown) return unavailable('shutting down');
 
-  let identity: SocketIdentity;
+  // Introspection is async; a client reset meanwhile must not crash the process.
+  socket.on('error', () => socket.destroy());
+  let identity: GatewayIdentity;
   try {
-    identity = readSocketIdentity(request);
+    identity = await identityFromRequest(request);
   } catch (err) {
-    // Token invalid/absent: do not establish a WebSocket connection. Record a
-    // structured warning (with the request's remote address) so rejected
-    // upgrade attempts are auditable, without logging the token itself.
+    // Messages never carry the token. A refusal completes the handshake and
+    // closes 4401 because a browser cannot read a failed upgrade's status.
+    if (err instanceof IdentityUnavailable) return unavailable(err.message);
     statsd.increment('ws_upgrade_rejected');
     logger.warn(
       `Rejected WebSocket upgrade from ${request.socket.remoteAddress ?? 'unknown'}: ` +
         `${(err as Error).message}`,
     );
-    socket.destroy();
+    if (err instanceof IdentityRefused) {
+      wss.handleUpgrade(request, socket, head, (ws: WebSocket) => {
+        wss.emit('connection', ws, request);
+        ws.close(REFUSED_CLOSE_CODE, 'unauthorized');
+      });
+    } else {
+      socket.destroy();
+    }
     return;
   }
+  // The subscriber may have dropped, or SIGTERM arrived, while introspection
+  // was in flight.
+  if (!subscriberHealthy) return unavailable('Redis subscriber unhealthy');
+  if (shuttingDown) return unavailable('shutting down');
 
   // Optional per-tab id advertised on the connect URL (`?tab_id=<id>`), used to
   // also bind the socket to a per-tab channel for targeted task-status delivery.
@@ -928,7 +836,7 @@ export const checkSockets = () => {
     const timeout = now - socketInstance.pongTs;
     let isActive = true;
 
-    if (now >= socketInstance.identity.tokenExpiresAtMs) {
+    if (now >= socketInstance.identity.expiresAtMs) {
       logger.debug(
         `terminating socket with expired token: ${socketId}, channel: ${socketInstance.channel}`,
       );
@@ -998,6 +906,7 @@ if (startServer) {
   });
   httpServer.on('request', httpRequest);
   httpServer.on('upgrade', httpUpgrade);
+  process.on('SIGTERM', shutdown);
   httpServer.listen(opts.port);
   logger.info(`Server started on port ${opts.port}`);
 
@@ -1017,6 +926,7 @@ export const resetState = () => {
   channels = {};
   sockets = {};
   messageBound = false;
+  shuttingDown = false;
   // A reset server is a clean, running (subscribed) server, so tests start from a
   // healthy transport; a test drives the unhealthy edge with markSubscriberUnhealthy.
   subscriberHealthy = true;

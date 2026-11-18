@@ -8,7 +8,5 @@
     "port": 8125,
     "globalTags": []
   },
-  "jwtSecret": "test123-test123-test123-test123-test123-test123-test123",
-  "previousJwtSecret": "old123-old123-old123-old123-old123-old123-old123",
-  "jwtCookieName": "test-ws-token"
+  "introspectUrl": "http://control-plane.test/internal/v1/auth/introspect"
 }

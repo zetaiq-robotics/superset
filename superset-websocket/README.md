@@ -16,13 +16,14 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
+<!-- Modified by ZetaIQ: identity from the gateway's bearer token checked by introspection replaces the JWT cookie. -->
 
 # Superset WebSocket Server
 
 A Node.js WebSocket server that pushes realtime events from the Superset backend
 to the web frontend. It is a shared transport for authenticated realtime
 sockets: it broadcasts opaque entity-change nudges and fans targeted task-status
-events out to JWT-bound socket routing keys.
+events out to socket routing keys bound to an introspected identity.
 
 ## Requirements
 
@@ -32,8 +33,8 @@ events out to JWT-bound socket routing keys.
 - Redis or Valkey, reachable for Pub/Sub
 
 To use realtime push, enable it in the Superset backend (`WEBSOCKET_ENABLE`,
-`WEBSOCKET_URL`, `WEBSOCKET_JWT_SECRET`; see below) and run this server on the
-same browser-visible host.
+`WEBSOCKET_URL`; see below) and run this server behind the read gateway, which
+stamps each upgrade with the caller's bearer token.
 
 ## Architecture
 
@@ -62,7 +63,7 @@ is from **who** receives it:
 - **`scope`** — the delivery breadth the server routes by:
   - `authenticated_global` — broadcast to **every authenticated** realtime socket.
     This is authenticated-global, **not** public: anonymous users get no realtime
-    principal, no JWT cookie, and therefore no socket, so they never receive these
+    principal, no bearer token, and therefore no socket, so they never receive these
     messages. (True anonymous/Public-role realtime would need a separate,
     restricted model and is out of scope.)
   - `principal` / `tab` — targeted to the routing keys in `routes`. The server
@@ -100,54 +101,53 @@ before publishing, so a key can never target another principal.
 
 ### Connection
 
-When a user's browser connects, it does so over HTTP, including the JWT
-authentication cookie set by the Flask app (`WEBSOCKET_JWT_COOKIE_NAME`, default
-`superset-ws-token`). _Because authentication is cookie-based, the WebSocket
-server must be served from the same browser-visible host as the web
-application._ In Kubernetes this is expected to run cleanly as a separate
-Deployment/Service behind an ingress that supports WebSocket upgrades. The
-server verifies the JWT with the shared secret (`jwtSecret` / `JWT_SECRET`).
-Superset mints the token only after the request principal has `can_read` on the
-`Realtime` resource. The token carries `aud`, `iss`, `sub`, `principal_type`,
-`channel`, and `exp`; the server rejects tokens whose channel does not match the
-principal identity. The permission itself is not serialized into the token: a
-valid token signed with the websocket secret is the proof that Superset already
-authorized the transport.
-The socket is bound to the `channel` claim (its principal channel), which is how
-principal-grain task-status fanout selects recipient sockets. A principal may
-have multiple sockets (e.g. several browser tabs); a message to the principal
-channel is sent to all of them. When a browser also advertises a `tab_id` on the
-connect URL (`wss://…/?tab_id=<id>`), its socket is additionally bound to a
-per-tab channel (`<channel>:<tab_id>`, derived from the authorized principal
-channel so it can never cross principals), letting the producer target one tab.
-Because permission is checked when Superset mints the JWT and when the websocket
-server accepts the upgrade, revocation after minting is bounded by the token
-lifetime; the Superset default is 15 minutes. To keep a long-lived surface
-connected without waiting for a hard disconnect at expiry, Superset re-mints the
-cookie inside a sliding window (any request in the second half of the token's
-life gets a fresh cookie), and the browser client proactively refreshes the
-cookie and reconnects before expiry — so an active or idle-but-open realtime
-surface stays connected while revocation remains bounded by the same lifetime.
+The browser connects through the read gateway. The gateway strips cookies and
+any client-sent `Authorization` header, and stamps
+`Authorization: Bearer <token>`: a delegated token for the `dashboards` service
+that names one person in one tenant and lasts at most 20 minutes. The bearer is
+read from the `authorization` header only (scheme `Bearer`, any case); there is
+no cookie or query-string fallback, and a request without one is dropped.
 
-During websocket JWT secret rotation, the websocket service can accept both the
-current key (`jwtSecret` / `JWT_SECRET`) and one previous verify-only key
-(`previousJwtSecret` / `PREVIOUS_JWT_SECRET`). The Flask app does not need the
-previous key: it keeps minting new cookies with `WEBSOCKET_JWT_SECRET`, and any
-cookie signed by the old key is replaced on the next HTTP response. Keep the
-previous key configured on the websocket service until old cookies and open
-sockets have aged out, then remove it.
+The server learns who the caller is only by introspecting that token with the
+control plane: `POST <INTROSPECT_URL>` with
+`{"token": "<token>", "service": "dashboards"}`, a 5 second timeout and no
+redirects. The answer gives `tenant_id`, `org_user_id` and `expires_at`.
+
+- A `404` answer, a tenant that does not match `^[a-z0-9]{2,63}$`, a person
+  that does not match `^[A-Za-z0-9_-]{1,128}$`, or an `expires_at` already in
+  the past refuses the token. Because a browser cannot read the status of a
+  failed upgrade, the server completes the handshake and closes at once with
+  code `4401`.
+- Any other failure (another status, a network error or timeout, a malformed
+  answer) answers the upgrade with `503`, and the client backs off.
+
+The token is held in memory only and is never logged; logs name the tenant and
+person at most.
+
+An accepted socket is bound to its person channel, `t:<tenant>:p:<person>`. A
+person may have several sockets (one per tab). When a browser also advertises
+a `tab_id` on the connect URL (`wss://…/?tab_id=<id>`), its socket is
+additionally bound to `<channel>:<tab_id>`.
+
+Each socket's identity stays checked while it is open:
+
+- a per-socket timer closes it with `4401` exactly at `expires_at`;
+- it is introspected again every `introspectIntervalMs` (default 60 s, first
+  check at a random offset so a replica's sockets do not all call at once). A
+  refusal closes it with `4401`; an unavailable control plane closes it with
+  `1013` so the client backs off and reconnects.
+
+On `SIGTERM` the server stops admitting upgrades (one still waiting on
+introspection answers `503`), closes every socket with `1012` so clients
+reconnect promptly, and exits a second later.
 
 The service is stateless apart from process-local live socket handles. Each
-replica subscribes to the same Redis Pub/Sub channel, receives the same
-events, and forwards only to matching sockets connected to that replica. Sticky
-sessions are not required; reconnecting to another replica reuses the JWT cookie
-and binds the socket to the same principal channel. Short websocket JWT
-lifetimes keep connection lifetime bounded for pod recycling; if a pod is
-terminated before expiry, connected browsers reconnect and a one-shot catch-up
-fetch on reconnect reconciles any events missed while disconnected (chart-data
-waiters re-check `/task/status_changes` from their retained cursor; list views
-refetch their displayed rows). There is no recurring poll while the socket is
-connected.
+replica subscribes to the same Pub/Sub channel, receives the same events, and
+forwards only to matching sockets connected to that replica. Sticky sessions
+are not required; a client that reconnects to another replica presents a fresh
+token and is bound to the same person channel. A one-shot catch-up fetch on
+reconnect reconciles any events missed while disconnected. There is no
+recurring poll while the socket is connected.
 
 ### Connection Management
 
@@ -156,7 +156,8 @@ The server uses standard WebSocket
 to detect dead connections. Active sockets are pinged regularly (config:
 `pingSocketsIntervalMs`) and the internal registry records the last _pong_
 timestamp; a socket that has not responded within `socketResponseTimeoutMs` is
-terminated. Sockets are also terminated after the JWT `exp` time passes. The
+terminated. The sweep also terminates a socket whose token has expired (the
+per-socket timer above normally closes it first). The
 channel registry is periodically cleaned
 (`gcChannelsIntervalMs`) to release stale references.
 
@@ -190,8 +191,7 @@ from:
 The `Origin` header of each upgrade request must exactly match one of the
 configured values. When `allowedOrigins` is empty (the default) the check is
 skipped and any origin is accepted; a single `"*"` entry explicitly allows any
-origin. Setting this is recommended for production deployments, especially when
-the JWT cookie uses `SameSite=None`.
+origin. Set it to the gateway's origin in production.
 
 ### Production hardening checklist
 
@@ -200,18 +200,26 @@ image, review these before exposing it publicly:
 
 - **`ALLOWED_ORIGINS`** — set it to your Superset origin(s) (see above). The
   default (empty) accepts any origin.
-- **Secure, scoped JWT cookie** — on the Flask side set
-  `WEBSOCKET_JWT_COOKIE_SECURE = True` (HTTPS only) and choose an explicit
-  `WEBSOCKET_JWT_COOKIE_SAMESITE` (`"Lax"` when the app and websocket share a
-  site; `"None"` only for cross-site, which then *requires* `Secure` and an
-  `ALLOWED_ORIGINS` allowlist). Scope with `WEBSOCKET_JWT_COOKIE_DOMAIN` if
-  needed. Cookies are short-lived and JWT-bound, but these flags close the
-  cross-site surface.
-- **Connection caps** — the server accepts unlimited connections by default
-  (`0`). Set `maxTotalConnections` and `maxConnectionsPerChannel` (and
-  optionally `maxSocketBufferBytes`) to bound resource use and blunt abuse.
+- **Reachable only from the gateway** — identity comes from the bearer token
+  the gateway stamps; nothing else may reach this service's port.
+- **Connection caps** — on by default (see the table below). Over the total or
+  per-person cap the handshake completes and the socket closes with `1013`. A
+  socket whose next send would push its outbound buffer past
+  `maxSocketBufferBytes` is terminated: a tab that stops reading is cut rather
+  than growing the server's memory.
 - **Keepalive/timeouts** — `pingSocketsIntervalMs` / `socketResponseTimeoutMs`
   govern dead-connection reaping; the defaults are sane, tune per environment.
+
+### Identity and limits
+
+| Setting                    | Environment variable          | Default  | Notes |
+| -------------------------- | ----------------------------- | -------- | ----- |
+| `introspectUrl`            | `INTROSPECT_URL`              | (none)   | Full URL of the control plane's token introspection endpoint. Required: the server exits at start-up without it. |
+| `introspectIntervalMs`     | `INTROSPECT_INTERVAL_MS`      | `60000`  | Re-introspection interval per socket; values below `5000` are raised to `5000`. |
+| `maxSocketsPerPerson`      | `MAX_SOCKETS_PER_PERSON`      | `20`     | Open sockets per person on one replica; `0` disables. |
+| `maxTotalConnections`      | `MAX_TOTAL_CONNECTIONS`       | `10000`  | Open sockets per replica; `0` disables. |
+| `maxSocketBufferBytes`     | `MAX_SOCKET_BUFFER_BYTES`     | `1048576`| Outbound buffer cap per socket; `0` disables. |
+| `maxConnectionsPerChannel` | `MAX_CONNECTIONS_PER_CHANNEL` | `0`      | Upstream per-channel cap; off by default. |
 
 ## Superset Configuration
 
@@ -219,30 +227,17 @@ Enable realtime push in the Superset Flask app (in `superset_config.py`):
 
 ```python
 WEBSOCKET_ENABLE = True
-WEBSOCKET_URL = "ws://<host>:<port>/"
-WEBSOCKET_JWT_SECRET = "<a strong random secret, >= 32 bytes>"
+WEBSOCKET_URL = "<the gateway path that routes to this server>"
 ```
 
-The built-in `Gamma` role receives `can_read` on `Realtime`; grant that
-permission to any additional roles that should receive websocket notifications.
-Without that permission, Superset masks `WEBSOCKET_ENABLE` to `False` for the
-request and does not mint the websocket JWT cookie.
+`WEBSOCKET_URL` points at the gateway route, not at this server directly: the
+gateway stamps the bearer token this server introspects.
 
-Note that the WebSocket server must be run on the same hostname (different port)
-for the JWT cookie to be shared between the Flask app and the WebSocket server.
-
-Note also that `localhost` and `127.0.0.1` are not considered the same host. For
-example, if you're pointing your browser to `localhost:<port>` for Superset,
-then the WebSocket url will need to be configured as `localhost:<port>`.
-
-The following values must be coordinated between the Flask app config and
+The following value must be coordinated between the Flask app config and
 this server's `config.json` (or its environment-variable overrides):
 
 | Purpose                     | Flask app config            | WebSocket server config                     |
 | --------------------------- | --------------------------- | ------------------------------------------- |
-| Current signing/verify key  | `WEBSOCKET_JWT_SECRET`      | `jwtSecret` / `JWT_SECRET`                  |
-| Previous verify-only key    | not needed                  | `previousJwtSecret` / `PREVIOUS_JWT_SECRET` |
-| Cookie name                 | `WEBSOCKET_JWT_COOKIE_NAME` | `jwtCookieName` / `JWT_COOKIE_NAME`         |
 | Realtime channel prefix     | `REALTIME_CHANNEL_PREFIX`   | `realtimeChannelPrefix` / `REALTIME_CHANNEL_PREFIX` |
 
 The Redis connection (`redis` / `REDIS_*`) must point at the same Redis instance
@@ -320,18 +315,14 @@ an alternate entrypoint, so no separate image is required:
 
 ```bash
 docker run --rm -p 8080:8080 \
-  -e JWT_SECRET="<same value as the app's WEBSOCKET_JWT_SECRET, >= 32 bytes>" \
-  -e PREVIOUS_JWT_SECRET="<old websocket JWT secret during rotation, optional>" \
+  -e INTROSPECT_URL="<control plane introspection URL>" \
   -e REDIS_HOST=<redis-host> \
   apache/superset:<tag> /app/docker/entrypoints/run-websocket.sh
 ```
 
 Configure it with the same environment variables as the standalone server (see
-`src/config.ts`); `JWT_SECRET` / `JWT_COOKIE_NAME` must match the Flask app's
-`WEBSOCKET_JWT_SECRET` / `WEBSOCKET_JWT_COOKIE_NAME`,
-`PREVIOUS_JWT_SECRET` can hold the prior websocket JWT secret during rotation,
-and the Redis connection must point at the same instance as
-`DISTRIBUTED_COORDINATION_CONFIG`.
+`src/config.ts`); `INTROSPECT_URL` is required, and the Redis connection must
+point at the same instance as `DISTRIBUTED_COORDINATION_CONFIG`.
 
 With `docker compose`, start it via the opt-in `websocket` profile:
 

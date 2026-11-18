@@ -23,9 +23,6 @@
     "sentinelMaster": "",
     "sentinelPassword": ""
   },
-  "jwtAlgorithms": ["HS256"],
-  "jwtSecret": "CHANGE-ME",
-  "previousJwtSecret": "",
-  "jwtCookieName": "superset-ws-token",
+  "introspectUrl": "http://zeta-control-plane:8081/internal/v1/auth/introspect",
   "allowedOrigins": []
 }
