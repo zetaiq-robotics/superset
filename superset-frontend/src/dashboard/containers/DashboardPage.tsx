@@ -18,6 +18,8 @@
  *
  * Modified by ZetaIQ: keeps the open dashboard live when websockets run in
  * gateway mode.
+ * Modified by ZetaIQ: the editor's "Dashboard changed" modal, the header
+ * badge's state, and "no longer available" in place of a gone dashboard.
  */
 import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
 import { Global } from '@emotion/react';
@@ -55,7 +57,12 @@ import {
 import DashboardContainer from 'src/dashboard/containers/Dashboard';
 import CrudThemeProvider from 'src/components/CrudThemeProvider';
 import getBootstrapData from 'src/utils/getBootstrapData';
-import { useDashboardLive } from 'src/dashboard/live/useDashboardLive';
+import {
+  LiveBadgeContext,
+  useDashboardLive,
+} from 'src/dashboard/live/useDashboardLive';
+import DashboardChangedModal from 'src/dashboard/components/DashboardChangedModal';
+import DashboardUnavailable from 'src/dashboard/components/DashboardUnavailable';
 import type { DashboardChartStates } from 'src/dashboard/types/chartState';
 
 import { nanoid } from 'nanoid';
@@ -188,8 +195,22 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   const conf = getBootstrapData().common?.conf;
   const liveEnabled =
     Boolean(conf?.WEBSOCKET_ENABLE) && conf?.WEBSOCKET_AUTH === 'gateway';
-  useDashboardLive(
+  const live = useDashboardLive(
     liveEnabled && hydratedDashboardId === id ? (hydratedUuid ?? '') : '',
+  );
+  // a refresh answered 404, or a `deleted` event
+  const unavailable =
+    useSelector<RootState, boolean>(
+      state => !!state.dashboardState?.unavailable,
+    ) || live.unavailable;
+  const liveBadge = useMemo(
+    () => ({
+      // the modal itself stands in for the badge while it is open
+      count: live.prompt ? 0 : live.badgeCount,
+      names: live.summary?.authors ?? [],
+      open: live.openPrompt,
+    }),
+    [live.prompt, live.badgeCount, live.summary, live.openPrompt],
   );
 
   // Get CSS from dashboardInfo (unified properties location)
@@ -432,6 +453,8 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     );
   }
 
+  if (unavailable) return <DashboardUnavailable />;
+
   return (
     <>
       <Global styles={globalStyles} />
@@ -443,12 +466,21 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
               theme={reduxTheme !== undefined ? reduxTheme : dashboard?.theme}
             >
               <AutoRefreshProvider>
-                <DashboardContainer
-                  activeFilters={activeFilters as ActiveFilters}
-                  ownDataCharts={relevantDataMask}
-                >
-                  {DashboardBuilderComponent}
-                </DashboardContainer>
+                <LiveBadgeContext.Provider value={liveBadge}>
+                  <DashboardContainer
+                    activeFilters={activeFilters as ActiveFilters}
+                    ownDataCharts={relevantDataMask}
+                  >
+                    {DashboardBuilderComponent}
+                  </DashboardContainer>
+                </LiveBadgeContext.Provider>
+                <DashboardChangedModal
+                  // shown once the history read has said who saved
+                  show={live.prompt && live.summary !== undefined}
+                  summary={live.summary ?? null}
+                  onDiscard={live.discard}
+                  onKeepEditing={live.dismissPrompt}
+                />
               </AutoRefreshProvider>
             </CrudThemeProvider>
           </DashboardPageIdContext.Provider>

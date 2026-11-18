@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test that a restore is held as this tab's own write.
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import {
@@ -24,6 +26,7 @@ import {
   restoreVersion,
 } from './api';
 import { useVersionActions } from './useVersionActions';
+import { ownWritesInFlight } from 'src/dashboard/live/versionTracker';
 
 jest.mock('./api', () => ({
   createChartFromSnapshot: jest.fn(),
@@ -339,4 +342,26 @@ test('activations from two hook instances do not fork twice', async () => {
     await panel.result.current.openAsNew(target);
   });
   expect(createChartFromSnapshot).toHaveBeenCalledTimes(2);
+});
+
+test("a restore is held as this tab's own write until it settles", async () => {
+  let finish: (value: unknown) => void = () => {};
+  (restoreVersion as jest.Mock).mockReturnValue(
+    new Promise(resolve => {
+      finish = resolve;
+    }),
+  );
+  const result = await restoreOnce();
+  let confirmed: Promise<void> | undefined;
+  act(() => {
+    confirmed = result.current.restoreModal?.props.onConfirm();
+  });
+  await waitFor(() => expect(restoreVersion).toHaveBeenCalled());
+  expect(ownWritesInFlight()).toBe(1);
+
+  await act(async () => {
+    finish({ message: 'OK' });
+    await confirmed;
+  });
+  await waitFor(() => expect(ownWritesInFlight()).toBe(0));
 });

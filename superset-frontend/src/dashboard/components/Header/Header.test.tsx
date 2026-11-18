@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a test for the `dashboard.nav.left` extension.
+ * Modified by ZetaIQ: a test for the "Newer version available" badge.
  */
 // Imported first: loading this before 'spec/helpers/testing-library' or
 // '@superset-ui/core' ensures mockAntdWithDesktopBreakpoint is defined
@@ -31,6 +32,7 @@ import { getExtensionsRegistry, JsonObject } from '@superset-ui/core';
 import setupCodeOverrides from 'src/setup/setupCodeOverrides';
 import getUserName from 'src/utils/getUserName';
 import { render, createStore } from 'spec/helpers/testing-library';
+import { LiveBadgeContext } from 'src/dashboard/live/useDashboardLive';
 import reducerIndex from 'spec/helpers/reducerIndex';
 import Header from '.';
 import { DASHBOARD_HEADER_ID } from '../../util/constants';
@@ -551,6 +553,37 @@ test('should render an enabled "Discard" button when there are unsaved changes',
   expect(screen.getByRole('button', { name: /discard/i })).toBeEnabled();
   expect(
     screen.queryByRole('button', { name: /exit edit mode/i }),
+  ).not.toBeInTheDocument();
+});
+
+test('edit mode shows the newer-version badge, which offers the choices again', async () => {
+  const open = jest.fn();
+  render(
+    <LiveBadgeContext.Provider
+      value={{ count: 2, names: ['Priya', 'Ana'], open }}
+    >
+      <div className="dashboard">
+        <Header />
+      </div>
+    </LiveBadgeContext.Provider>,
+    {
+      useRedux: true,
+      useTheme: true,
+      initialState: { ...initialState, ...editableState },
+    },
+  );
+  await userEvent.click(
+    screen.getByRole('button', {
+      name: 'Newer version available (2 saves by Priya and Ana)',
+    }),
+  );
+  expect(open).toHaveBeenCalledTimes(1);
+});
+
+test('no badge without a newer version', () => {
+  setup(editableState);
+  expect(
+    screen.queryByRole('button', { name: /newer version available/i }),
   ).not.toBeInTheDocument();
 });
 

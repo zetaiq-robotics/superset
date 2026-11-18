@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the reload after a restore counts as this tab's own
+ * write, so live change events wait for the restored version.
  */
 import { useEffect, useRef } from 'react';
 import { useSelector, useStore } from 'react-redux';
@@ -30,6 +33,7 @@ import {
 } from 'src/dashboard/actions/hydrate';
 import { clearDataMaskState } from 'src/dataMask/actions';
 import type { RootState } from 'src/dashboard/types';
+import { trackOwnWrite } from 'src/dashboard/live/versionTracker';
 import {
   fetchDashboardHydrationData,
   fetchDashboardTheme,
@@ -297,7 +301,8 @@ export function useDashboardVersionPreview(uuid: string | undefined) {
       }
       fetchIdRef.current += 1;
       const fetchId = fetchIdRef.current;
-      fetchDashboardHydrationData(dashboardId)
+      // held until the restored version (and its ETag) is hydrated
+      trackOwnWrite(fetchDashboardHydrationData(dashboardId))
         .then(data => {
           if (fetchId !== fetchIdRef.current) {
             return;

@@ -29,6 +29,7 @@ import {
   SET_ACTIVE_TABS,
   setDirectPathToChild,
   setFullSizeChartId,
+  setEditMode,
   setRefreshFrequency,
 } from 'src/dashboard/actions/dashboardState';
 import { updateDataMask } from 'src/dataMask/actions';
@@ -75,6 +76,7 @@ type Def = {
   charts?: Record<number, string>;
   filters?: object[];
   refresh?: number;
+  slug?: string | null;
 };
 
 const layout = (tabs: Record<string, number[]>) => {
@@ -113,6 +115,7 @@ const V1: Required<Def> = {
   charts: { 11: 'count', 12: 'count', 13: 'count' },
   filters: [REGION, SITE],
   refresh: 0,
+  slug: null,
 };
 
 const payload = (def: Def) => {
@@ -121,7 +124,7 @@ const payload = (def: Def) => {
     dashboard: {
       id: ID,
       dashboard_title: 'Fleet',
-      slug: null,
+      slug: d.slug,
       owners: [],
       published: true,
       css: '',
@@ -148,12 +151,12 @@ const payload = (def: Def) => {
 };
 
 /** The page as a viewer has it: loaded at v1, charts rendered, state set. */
-const setup = () => {
+const setup = (def: Def = {}) => {
   const store = createStore({}, reducerIndex) as unknown as {
     dispatch: (action: unknown) => any;
     getState: () => any;
   };
-  const { dashboard, charts } = payload({});
+  const { dashboard, charts } = payload(def);
   store.dispatch(
     hydrateDashboard({
       history,
@@ -414,4 +417,42 @@ test('404 → DASHBOARD_UNAVAILABLE', async () => {
   expect(store.getState().charts[11].queriesResponse).toEqual([
     { data: [{ n: 11 }] },
   ]);
+});
+
+test('clean edit mode refreshes and stays in edit mode', async () => {
+  const store = setup();
+  store.dispatch(setEditMode(true));
+  serve({ charts: { ...V1.charts, 13: 'sum' } });
+  await refresh(store);
+  expect(store.getState().dashboardState.editMode).toBe(true);
+  expect(store.getState().charts[13].triggerQuery).toBe(true);
+});
+
+test('a changed slug corrects the address bar and keeps the query string', async () => {
+  const store = setup({ slug: 'fleet' });
+  window.history.replaceState(
+    null,
+    '',
+    '/superset/dashboard/fleet/?native_filters_key=abc#CHART-11',
+  );
+  serve({ slug: 'fleet-ops' });
+  await refresh(store);
+  expect(window.location.pathname).toBe('/superset/dashboard/fleet-ops/');
+  expect(window.location.search).toBe('?native_filters_key=abc');
+  expect(window.location.hash).toBe('#CHART-11');
+
+  // slug removed: the address falls back to the id
+  fetchMock.removeRoutes();
+  serve({ slug: null });
+  await refresh(store);
+  expect(window.location.pathname).toBe(`/superset/dashboard/${ID}/`);
+});
+
+test('an address by id is left alone when the slug changes', async () => {
+  const store = setup({ slug: 'fleet' });
+  window.history.replaceState(null, '', `/superset/dashboard/${ID}/?x=1`);
+  serve({ slug: 'fleet-ops' });
+  await refresh(store);
+  expect(window.location.pathname).toBe(`/superset/dashboard/${ID}/`);
+  expect(window.location.search).toBe('?x=1');
 });

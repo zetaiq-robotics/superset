@@ -93,7 +93,7 @@ export function StaleSaveModal({
   );
 }
 
-const reloadWithoutEdits = () => {
+export const reloadWithoutEdits = () => {
   // the person chose to drop the edits: no "Leave site?" asking again
   armUnsavedChangesPrompt(false);
   const url = new URL(window.location.href);

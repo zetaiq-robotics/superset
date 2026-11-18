@@ -18,9 +18,17 @@
  *
  * Modified by ZetaIQ: a `dashboard.nav.left` extension renders before the title.
  * Modified by ZetaIQ: renders the stale-save modal.
+ * Modified by ZetaIQ: the "Newer version available" badge in edit mode.
  */
 /* eslint-env browser */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   isFeatureEnabled,
   FeatureFlag,
@@ -73,6 +81,8 @@ import { selectIsDashboardVersionPreviewActive } from 'src/features/versionHisto
 import DashboardEmbedModal from '../EmbeddedModal';
 import OverwriteConfirm from '../OverwriteConfirm';
 import DashboardStaleSave from '../StaleSaveModal';
+import NewerVersionBadge from '../NewerVersionBadge';
+import { LiveBadgeContext } from 'src/dashboard/live/useDashboardLive';
 import {
   addDangerToast,
   addSuccessToast,
@@ -238,6 +248,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
   const dispatch = useDispatch();
   const theme = useTheme();
   const isMobile = useIsMobile();
+  const liveBadge = useContext(LiveBadgeContext);
   const [didNotifyMaxUndoHistoryToast, setDidNotifyMaxUndoHistoryToast] =
     useState(false);
   const [emphasizeUndo, setEmphasizeUndo] = useState(false);
@@ -704,6 +715,11 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
           <div className="button-container" data-test="dashboard-edit-actions">
             {editMode && (
               <div css={actionButtonsStyle}>
+                <NewerVersionBadge
+                  count={liveBadge.count}
+                  names={liveBadge.names}
+                  onClick={liveBadge.open}
+                />
                 <div className="undoRedo">
                   <Tooltip
                     id="dashboard-undo-tooltip"
@@ -812,6 +828,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
       hasUnsavedChanges,
       isEmbedded,
       isMobile,
+      liveBadge,
       overwriteDashboard,
       redoLength,
       undoLength,

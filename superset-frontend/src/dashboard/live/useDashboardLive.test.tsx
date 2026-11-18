@@ -24,6 +24,16 @@ import {
   setDashboardVersions,
 } from 'src/dashboard/actions/dashboardInfo';
 import * as realtime from 'src/middleware/realtime';
+import {
+  dashboardUnavailable,
+  setUnsavedChanges,
+} from 'src/dashboard/actions/dashboardState';
+import {
+  clearVersionPreview,
+  openVersionHistoryPanel,
+  setVersionPreview,
+} from 'src/features/versionHistory/reducer';
+import { loadStaleSummary } from './changeSummary';
 import { refreshInPlace } from './refreshInPlace';
 import { trackOwnWrite } from './versionTracker';
 import { useDashboardLive } from './useDashboardLive';
@@ -53,6 +63,10 @@ jest.mock('src/middleware/realtime', () => {
 });
 
 jest.mock('./refreshInPlace', () => ({ refreshInPlace: jest.fn() }));
+jest.mock('./changeSummary', () => ({
+  ...jest.requireActual('./changeSummary'),
+  loadStaleSummary: jest.fn(),
+}));
 
 const { mockHandlers, mockOpenListeners } = realtime as unknown as {
   mockHandlers: Record<string, (payload: unknown) => void>;
@@ -60,6 +74,7 @@ const { mockHandlers, mockOpenListeners } = realtime as unknown as {
 };
 const send = realtime.sendRealtime as jest.Mock;
 const refresh = refreshInPlace as jest.Mock;
+const history = loadStaleSummary as jest.Mock;
 
 // the version the server holds; the stub refresh moves the tab to it
 let mockLive = 'v1';
@@ -68,7 +83,9 @@ let visibility: DocumentVisibilityState = 'visible';
 const ID = 7;
 const UUID = 'd1';
 
-const setup = () => {
+const setup = (
+  dashboardState = { editMode: false, hasUnsavedChanges: false },
+) => {
   const store = createStore(
     {
       dashboardInfo: {
@@ -76,7 +93,7 @@ const setup = () => {
         uuid: UUID,
         versions: { base: 'v1', latest: 'v1' },
       },
-      dashboardState: { editMode: false, hasUnsavedChanges: false },
+      dashboardState,
       messageToasts: [],
     },
     reducerIndex,
@@ -136,6 +153,13 @@ beforeEach(() => {
       return Promise.resolve();
     },
   );
+  history.mockReset();
+  history.mockResolvedValue({
+    changedBy: 'Priya',
+    changedAt: 'Nov 17, 2026 10:00 AM',
+    lines: [],
+    authors: ['Priya'],
+  });
   mockLive = 'v1';
   visibility = 'visible';
   document.body.innerHTML = '';
@@ -375,6 +399,173 @@ test('unmount cancels a pending refresh', async () => {
   const { hook } = setup();
   changed('v2', 2);
   hook.unmount();
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+// editors (spec §7.8)
+const EDITING = { editMode: true, hasUnsavedChanges: true };
+const state = (store: ReturnType<typeof createStore>) =>
+  store.getState() as any;
+
+test('prompt shows name and time from the re-fetch', async () => {
+  const { hook, store } = setup(EDITING);
+  changed('v2', 2);
+  // one history read, against the base the unsaved edits started from
+  await act(async () => {});
+  expect(history).toHaveBeenCalledTimes(1);
+  expect(history.mock.calls[0].slice(0, 3)).toEqual(['dashboard', UUID, 'v1']);
+  expect(hook.result.current.prompt).toBe(true);
+  expect(hook.result.current.summary).toMatchObject({ changedBy: 'Priya' });
+  // nothing of the editor's is touched
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(toasts(store)).toEqual([]);
+  expect(state(store).dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v2',
+  });
+});
+
+test('discard loads latest and leaves edit mode', async () => {
+  const { hook, store } = setup(EDITING);
+  mockLive = 'v2';
+  changed('v2', 2);
+  await act(async () => {});
+  await act(async () => hook.result.current.discard());
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(refresh.mock.calls[0][0]).toBe(ID);
+  expect(state(store).dashboardState).toMatchObject({
+    editMode: false,
+    hasUnsavedChanges: false,
+  });
+  expect(state(store).dashboardInfo.versions).toEqual({
+    base: 'v2',
+    latest: 'v2',
+  });
+  expect(hook.result.current.prompt).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(0);
+});
+
+test('keep editing keeps base and shows badge', async () => {
+  const { hook, store } = setup(EDITING);
+  changed('v2', 2);
+  await act(async () => {});
+  act(() => hook.result.current.dismissPrompt());
+  expect(hook.result.current.prompt).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(1);
+  expect(state(store).dashboardInfo.versions.base).toBe('v1');
+  expect(state(store).dashboardState.editMode).toBe(true);
+
+  // the badge offers the same two choices again
+  act(() => hook.result.current.openPrompt());
+  expect(hook.result.current.prompt).toBe(true);
+});
+
+test('second save updates badge, no second modal', async () => {
+  const { hook } = setup(EDITING);
+  changed('v2', 2);
+  await act(async () => {});
+  act(() => hook.result.current.dismissPrompt());
+
+  history.mockResolvedValue({
+    changedBy: 'Ana',
+    changedAt: 'Nov 17, 2026 10:05 AM',
+    lines: [],
+    authors: ['Priya', 'Ana'],
+  });
+  changed('v3', 3);
+  // an access-only change is not a save
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      etag: 'v3',
+      version: 3,
+      reason: 'access',
+    }),
+  );
+  await act(async () => {});
+  expect(hook.result.current.prompt).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(2);
+  expect(hook.result.current.summary?.authors).toEqual(['Priya', 'Ana']);
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+test('a successful save or leaving edit mode resets the badge', async () => {
+  const { hook, store } = setup(EDITING);
+  changed('v2', 2);
+  await act(async () => {});
+  act(() => hook.result.current.dismissPrompt());
+  expect(hook.result.current.badgeCount).toBe(1);
+
+  // Overwrite: the save moved the base
+  act(() => {
+    store.dispatch(setDashboardVersions(ID, { base: 'v4', latest: 'v4' }));
+  });
+  expect(hook.result.current.badgeCount).toBe(0);
+
+  // a newer save prompts again for the new base
+  changed('v5', 5);
+  await act(async () => {});
+  expect(hook.result.current.prompt).toBe(true);
+});
+
+test('clean edit mode refreshes and stays in edit mode', async () => {
+  const { hook, store } = setup({ editMode: true, hasUnsavedChanges: false });
+  mockLive = 'v2';
+  changed('v2', 2, 0);
+  await advance(0);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(hook.result.current.prompt).toBe(false);
+  expect(state(store).dashboardState.editMode).toBe(true);
+});
+
+test('edits started while a refresh waits get the prompt instead', async () => {
+  const { hook, store } = setup({ editMode: true, hasUnsavedChanges: false });
+  changed('v2', 2);
+  act(() => {
+    store.dispatch(setUnsavedChanges(true));
+  });
+  await advance(1000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(hook.result.current.prompt).toBe(true);
+});
+
+test('version preview holds events', async () => {
+  const { store } = setup();
+  act(() => {
+    store.dispatch(openVersionHistoryPanel('dashboard'));
+    store.dispatch(
+      setVersionPreview({
+        entityUuid: UUID,
+        versionUuid: 'old',
+        transactionId: 1,
+        headline: 'old',
+        issuedAt: '2026-11-17T10:00:00',
+      }),
+    );
+  });
+  mockLive = 'v2';
+  changed('v2', 2, 0);
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(toasts(store)).toEqual([]);
+
+  act(() => {
+    store.dispatch(clearVersionPreview(UUID));
+  });
+  // released after the preview's own re-hydrate, then refreshed
+  await advance(1);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('no further refreshes once the dashboard is unavailable', async () => {
+  const { store } = setup();
+  act(() => {
+    store.dispatch(dashboardUnavailable());
+  });
+  changed('v2', 2, 0);
   await advance(60_000);
   expect(refresh).not.toHaveBeenCalled();
 });
