@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a filter whose default alone changed keeps the
+ * applied selection on screen instead of an empty one.
  */
 
 /* eslint-disable no-param-reassign */
@@ -351,10 +354,15 @@ const FilterBar: FC<FiltersBarProps> = ({
         const targetsChanged = !isEqual(currentTargets, previousTargets);
         const dataMaskChanged = !isEqual(currentDataMask, previousDataMask);
 
-        if (typeChanged || targetsChanged || dataMaskChanged) {
+        if (typeChanged || targetsChanged) {
           updates[currentFilter.id] = getInitialDataMask(
             currentFilter.id,
           ) as DataMaskWithId;
+        } else if (dataMaskChanged) {
+          // only the default moved: the applied value still holds, so show
+          // it rather than an empty control (and an Apply lit for nothing)
+          updates[currentFilter.id] = (dataMaskApplied[currentFilter.id] ??
+            getInitialDataMask(currentFilter.id)) as DataMaskWithId;
         }
       });
 
@@ -362,7 +370,13 @@ const FilterBar: FC<FiltersBarProps> = ({
         setDataMaskSelected(draft => ({ ...draft, ...updates }));
       }
     }
-  }, [dashboardId, filters, previousDashboardId, setDataMaskSelected]);
+  }, [
+    dashboardId,
+    filters,
+    previousDashboardId,
+    setDataMaskSelected,
+    dataMaskApplied,
+  ]);
 
   const dataMaskAppliedText = JSON.stringify(dataMaskApplied);
   const prevDataMaskAppliedRef = useRef(dataMaskApplied);

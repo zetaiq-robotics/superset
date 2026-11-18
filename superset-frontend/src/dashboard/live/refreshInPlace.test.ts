@@ -33,6 +33,14 @@ import {
   setRefreshFrequency,
 } from 'src/dashboard/actions/dashboardState';
 import { updateDataMask } from 'src/dataMask/actions';
+import { setDashboardVersions } from 'src/dashboard/actions/dashboardInfo';
+import { setDatasources } from 'src/dashboard/actions/datasources';
+import {
+  openVersionHistoryPanel,
+  setVersionPreview,
+} from 'src/features/versionHistory/reducer';
+import type { Datasource } from 'src/dashboard/types';
+import { trackOwnWrite } from './versionTracker';
 import {
   CHART_UPDATE_SUCCEEDED,
   TRIGGER_QUERY,
@@ -77,6 +85,10 @@ type Def = {
   filters?: object[];
   refresh?: number;
   slug?: string | null;
+  /** charts saved since v1 (their changed_on moves) */
+  saved?: number[];
+  /** chart id -> its dataset, when not 1__table */
+  datasets?: Record<number, string>;
 };
 
 const layout = (tabs: Record<string, number[]>) => {
@@ -116,6 +128,8 @@ const V1: Required<Def> = {
   filters: [REGION, SITE],
   refresh: 0,
   slug: null,
+  saved: [],
+  datasets: {},
 };
 
 const payload = (def: Def) => {
@@ -140,12 +154,17 @@ const payload = (def: Def) => {
       slice_id: Number(id),
       slice_name: `chart ${id}`,
       slice_url: '',
-      form_data: formData(Number(id), metric),
+      form_data: {
+        ...formData(Number(id), metric),
+        datasource: d.datasets[Number(id)] ?? '1__table',
+      },
       description: '',
       description_markeddown: '',
       editors: [],
       modified: '',
-      changed_on: '2026-11-18T00:00:00',
+      changed_on: d.saved.includes(Number(id))
+        ? '2026-11-18T01:00:00'
+        : '2026-11-18T00:00:00',
     })),
   };
 };
@@ -193,6 +212,8 @@ const setup = (def: Def = {}) => {
   store.dispatch(updateDataMask(12, { filterState: { value: ['robot-7'] } }));
   store.dispatch(updateDataMask(11, { ownState: { currentPage: 3 } }));
   store.dispatch(setRefreshFrequency(30));
+  // the page has the dashboard's datasets, as DashboardPage loads them
+  store.dispatch(setDatasources([{ uid: '1__table' } as Datasource]));
   return store;
 };
 
@@ -305,7 +326,8 @@ test('removed fullscreen chart exits fullscreen and its cross-filter is cleared'
     tabs: { 'TAB-a': [11], 'TAB-b': [13] },
     charts: { 11: 'count', 13: 'count' },
   });
-  await expect(refresh(store)).resolves.toBeUndefined();
+  // no error: the refresh lands
+  await expect(refresh(store)).resolves.toBe('applied');
   const state = store.getState();
   expect(state.dashboardState.fullSizeChartId).toBeNull();
   expect(state.dataMask[12]).toBeUndefined();
@@ -455,4 +477,94 @@ test('an address by id is left alone when the slug changes', async () => {
   await refresh(store);
   expect(window.location.pathname).toBe(`/superset/dashboard/${ID}/`);
   expect(window.location.search).toBe('?x=1');
+});
+
+// combined review fixes
+
+test('an own write landing during the fetch aborts the refresh', async () => {
+  const store = setup();
+  const { dashboard, charts } = payload({
+    charts: { ...V1.charts, 13: 'sum' },
+  });
+  fetchMock.get(`glob:*/api/v1/dashboard/${ID}?q=*`, () => {
+    // e.g. a filter save adopting v3 while the GET (served at v2) is out
+    store.dispatch(setDashboardVersions(ID, { base: 'v3', latest: 'v3' }));
+    return { body: { result: dashboard }, headers: { ETag: 'W/"v2:a:zstd"' } };
+  });
+  fetchMock.get(`glob:*/api/v1/dashboard/${ID}/charts`, {
+    body: { result: charts },
+  });
+  await expect(refresh(store)).resolves.toBe('skipped');
+  // nothing applied: the base never goes backwards, the chart keeps its result
+  expect(store.getState().dashboardInfo.versions).toEqual({
+    base: 'v3',
+    latest: 'v3',
+  });
+  expect(store.getState().charts[13].triggerQuery).toBe(false);
+});
+
+test('an own write in flight or an open preview aborts the refresh', async () => {
+  const store = setup();
+  serve({});
+  let finish: () => void = () => {};
+  trackOwnWrite(
+    new Promise<void>(resolve => {
+      finish = resolve;
+    }),
+  );
+  await expect(refresh(store)).resolves.toBe('skipped');
+  finish();
+  // the write counts as settled a macrotask after it resolves
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  store.dispatch(openVersionHistoryPanel('dashboard'));
+  store.dispatch(
+    setVersionPreview({
+      entityUuid: 'x',
+      versionUuid: 'old',
+      transactionId: 1,
+      headline: 'old',
+      issuedAt: '2026-11-17T10:00:00',
+    }),
+  );
+  await expect(refresh(store)).resolves.toBe('skipped');
+  expect(store.getState().dashboardInfo.versions.base).toBe('v1');
+});
+
+test('an applied refresh says so', async () => {
+  const store = setup();
+  serve({});
+  await expect(refresh(store)).resolves.toBe('applied');
+});
+
+test('a chart saved with the same form_data still re-queries', async () => {
+  // e.g. only its query_context moved: the save moves changed_on
+  const store = setup();
+  serve({ saved: [12] });
+  await refresh(store);
+  expect(store.getState().charts[12].triggerQuery).toBe(true);
+  expect(store.getState().charts[11].triggerQuery).toBe(false);
+});
+
+test('fetches dataset metadata for a changed dataset and a new chart', async () => {
+  const store = setup();
+  fetchMock.get(
+    'glob:*/fetch_datasource_metadata?*',
+    { uid: 'x' },
+    { name: 'dataset-metadata' },
+  );
+  // same chart count: 13 is replaced by 14 on a new dataset, 12 moves dataset
+  serve({
+    tabs: { 'TAB-a': [11, 12], 'TAB-b': [14] },
+    charts: { 11: 'count', 12: 'count', 14: 'count' },
+    datasets: { 12: '2__table', 14: '3__table' },
+  });
+  await refresh(store);
+  // the metadata loads after the refresh lands
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const keys = fetchMock.callHistory
+    .calls('dataset-metadata')
+    .map(call => new URL(call.url).searchParams.get('datasourceKey'))
+    .sort();
+  expect(keys).toEqual(['2__table', '3__table']);
 });

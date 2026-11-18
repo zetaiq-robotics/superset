@@ -21,7 +21,10 @@ import { useStore } from 'react-redux';
 import { useHistory } from 'react-router-dom';
 import { t } from '@apache-superset/core/translation';
 import { logging } from '@apache-superset/core/utils';
-import { addInfoToast } from 'src/components/MessageToasts/actions';
+import {
+  addDangerToast,
+  addInfoToast,
+} from 'src/components/MessageToasts/actions';
 import { setDashboardVersions } from 'src/dashboard/actions/dashboardInfo';
 import { clearDashboardHistory } from 'src/dashboard/actions/dashboardLayout';
 import {
@@ -46,7 +49,7 @@ import {
   StaleSummary,
 } from './changeSummary';
 import { classifyEvent, DashboardChanged } from './classifyEvent';
-import { refreshInPlace } from './refreshInPlace';
+import { refreshInPlace, RefreshResult } from './refreshInPlace';
 import {
   NO_VERSIONS,
   noteNewer,
@@ -61,8 +64,10 @@ export type DashboardLiveState = {
   notice: 'updated' | 'updated-deferred' | null;
   /** an editor with unsaved changes should see "Dashboard changed" */
   prompt: boolean;
-  /** newer saves heard since the prompt ("Newer version available") */
+  /** newer saves heard since the editor's base ("Newer version available") */
   badgeCount: number;
+  /** every save counted was a chart's: nothing for a dashboard save to clash with */
+  chartOnly: boolean;
   /** the dashboard was deleted */
   unavailable: boolean;
   /**
@@ -76,15 +81,34 @@ const IDLE: DashboardLiveState = {
   notice: null,
   prompt: false,
   badgeCount: 0,
+  chartOnly: false,
   unavailable: false,
   summary: undefined,
 };
 
-/** The header's "Newer version available" badge, fed by the page. */
-export type LiveBadge = { count: number; names: string[]; open: () => void };
+/**
+ * Deleted under an editor with unsaved changes: their work stays on screen,
+ * but every save path (Save, Save as a copy) would answer 404.
+ */
+export const deletedWhileEditingMessage = () =>
+  t(
+    "This dashboard was deleted while you were editing. Your changes stay on screen, but they can't be saved unless the dashboard is restored.",
+  );
+
+/** What the header shows about live changes, fed by the page. */
+export type LiveBadge = {
+  count: number;
+  names: string[];
+  chartOnly: boolean;
+  /** the dashboard is gone: Save and Save as are not offered */
+  gone: boolean;
+  open: () => void;
+};
 export const LiveBadgeContext = createContext<LiveBadge>({
   count: 0,
   names: [],
+  chartOnly: false,
+  gone: false,
   open: () => {},
 });
 
@@ -99,19 +123,42 @@ type Subscribed = {
 // ponytail: "mid-action" is read from the page, because none of it is in
 // the store: the filter selection lives in the filter bar's local state and
 // open menus in the UI library's. Unapplied filter changes = an enabled
-// Apply button; a filter control open = an open select, date or popover
-// panel; a drill or context menu = an open dropdown menu. Polled once a
-// second only while a refresh waits; a store flag per control is the
+// Apply button (its own class: data-test is stripped from builds); a filter
+// control open = an open select, date or popover panel; a drill or context
+// menu = an open dropdown menu; any open dialog; typing in a field. Polled
+// once a second only while a refresh waits; a store flag per control is the
 // upgrade if a class name changes.
 const MID_ACTION = [
-  '[data-test="filter-bar__apply-button"]:not([disabled])',
+  '.filter-bar__apply-button:not([disabled])',
   '.ant-select-dropdown:not(.ant-select-dropdown-hidden)',
   '.ant-picker-dropdown:not(.ant-picker-dropdown-hidden)',
   '.ant-popover:not(.ant-popover-hidden)',
   '.ant-dropdown:not(.ant-dropdown-hidden)',
 ].join(',');
+const EDITABLE = [
+  'input:not([readonly]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"])',
+  'textarea:not([readonly])',
+  '[contenteditable=""]',
+  '[contenteditable="true"]',
+].join(',');
+// closed dialogs can stay in the page, hidden by a display:none wrapper
+const openDialog = () =>
+  Array.from(document.querySelectorAll('[role="dialog"]')).some(
+    el => !el.closest('[style*="display: none"]'),
+  );
 const MID_ACTION_POLL_MS = 1000;
-const isMidAction = () => document.querySelector(MID_ACTION) !== null;
+const isMidAction = () =>
+  document.querySelector(MID_ACTION) !== null ||
+  openDialog() ||
+  !!document.activeElement?.matches(EDITABLE);
+
+/** The "who saved" read gives up after this; the modal then names no one. */
+const SUMMARY_TIMEOUT_MS = 5000;
+/** An own write that has not settled by then stops holding live events. */
+const OWN_WRITE_HOLD_MS = 30_000;
+/** A refresh that failed or was skipped asks again after a jittered backoff. */
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 60_000;
 
 /**
  * Keep the open dashboard current (spec §7.6–§7.8): subscribe to its
@@ -137,10 +184,20 @@ export function useDashboardLive(dashboardUuid: string) {
     let reads = 0;
     let maxVersion: number | null = null;
     const chartEtags: Record<number, string> = {};
+    // the base a "Dashboard changed" modal was shown for
     let promptedBase: string | null | undefined;
+    // the editor has been told something (modal or badge) since the reset
+    let told = false;
+    // an access change arrived while the editor had unsaved changes
+    let accessPending = false;
     let digest: string | null = null;
-    let rebaseline = false;
+    // one entry per subscribe sent on this socket: is it a re-baseline?
+    // Replies come back in the order sent; a reconnect starts afresh.
+    const sent: boolean[] = [];
     let held: DashboardChanged[] = [];
+    // when this tab was first seen with own writes in flight
+    let writesSeen: number | null = null;
+    let capTimer: ReturnType<typeof setTimeout> | undefined;
     let pending: {
       charts: number[];
       /** newest dashboard version asked for, null if a non-version reason */
@@ -148,39 +205,77 @@ export function useDashboardLive(dashboardUuid: string) {
       deferred: boolean;
       /** any of the events was a save, not an access-only change */
       saved: boolean;
+      /** every event was a chart's save */
+      chartOnly: boolean;
     } | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let refreshing = false;
+    let failures = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const previewing = () =>
       selectIsDashboardVersionPreviewActive(
         store.getState() as unknown as VersionHistoryRootState,
       );
-    const holding = () => ownWritesInFlight() > 0 || previewing();
+    // own writes hold events, but one that never settles only for so long
+    const writing = () => {
+      if (ownWritesInFlight() === 0) {
+        writesSeen = null;
+        return false;
+      }
+      writesSeen ??= Date.now();
+      return Date.now() - writesSeen < OWN_WRITE_HOLD_MS;
+    };
+    const holding = () => writing() || previewing();
     const isGone = () => gone || !!store.getState().dashboardState.unavailable;
+    const isDirty = () => {
+      const { editMode, hasUnsavedChanges } = store.getState().dashboardState;
+      return Boolean(editMode && hasUnsavedChanges);
+    };
 
     // who saved and when: one history read, through normal access checks
     const readSummary = (base: string | null) => {
       reads += 1;
       const read = reads;
       const { id } = store.getState().dashboardInfo;
-      loadStaleSummary('dashboard', dashboardUuid, base, () =>
-        dashboardLastSave(id),
-      ).then(summary => {
+      Promise.race([
+        loadStaleSummary('dashboard', dashboardUuid, base, () =>
+          dashboardLastSave(id),
+        ),
+        new Promise<null>(resolve =>
+          setTimeout(() => resolve(null), SUMMARY_TIMEOUT_MS),
+        ),
+      ]).then(summary => {
         if (!disposed && read === reads) setLive(s => ({ ...s, summary }));
       });
     };
 
-    // an editor with unsaved changes: the modal once per base, then the badge
-    const tellEditor = (base: string | null) => {
+    // An editor with unsaved changes: the modal once per base, then the
+    // badge. A chart's save cannot make their dashboard save be refused, so
+    // it only counts on the badge, with no one named.
+    const tellEditor = (base: string | null, chart: boolean) => {
+      told = true;
+      if (chart) {
+        setLive(s => ({
+          ...s,
+          badgeCount: s.badgeCount + 1,
+          chartOnly: s.badgeCount === 0 || s.chartOnly,
+        }));
+        return;
+      }
       if (promptedBase === base) {
-        setLive(s => ({ ...s, badgeCount: s.badgeCount + 1 }));
+        setLive(s => ({
+          ...s,
+          badgeCount: s.badgeCount + 1,
+          chartOnly: false,
+        }));
       } else {
         promptedBase = base;
         setLive(s => ({
           ...s,
           prompt: true,
-          badgeCount: 1,
+          badgeCount: s.badgeCount + 1,
+          chartOnly: false,
           summary: undefined,
         }));
       }
@@ -188,8 +283,27 @@ export function useDashboardLive(dashboardUuid: string) {
     };
 
     const subscribe = (again = false) => {
-      rebaseline = again;
-      sendRealtime({ type: 'subscribe', dashboard: dashboardUuid });
+      if (sendRealtime({ type: 'subscribe', dashboard: dashboardUuid }))
+        sent.push(again);
+    };
+
+    // The newer version was not brought in: forget it, so the catch-up the
+    // server answers with asks again, after a jittered backoff.
+    const retry = () => {
+      const { id, versions = NO_VERSIONS } = store.getState().dashboardInfo;
+      if (versions.latest !== versions.base)
+        dispatch(
+          setDashboardVersions(id, {
+            base: versions.base,
+            latest: versions.base,
+          }),
+        );
+      failures += 1;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(
+        () => subscribe(),
+        Math.random() * Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failures),
+      );
     };
 
     const notify = (deferred: boolean) => {
@@ -215,26 +329,34 @@ export function useDashboardLive(dashboardUuid: string) {
     };
 
     const fire = () => {
-      const { dashboardInfo, dashboardState } = store.getState();
-      const { id, versions = NO_VERSIONS } = dashboardInfo;
-      const { charts, etag, saved } = pending!;
+      const { id, versions = NO_VERSIONS } = store.getState().dashboardInfo;
+      const { charts, etag, saved, chartOnly } = pending!;
       pending = null;
       setLive(s => ({ ...s, notice: null }));
       if (isGone()) return;
       // a refresh in flight already brought this version in
       if (etag && versionOf(etag) === versions.base) return;
       // edits started while the refresh waited: tell the editor instead
-      if (dashboardState.editMode && dashboardState.hasUnsavedChanges) {
-        if (saved) tellEditor(versions.base);
+      if (isDirty()) {
+        if (saved) tellEditor(versions.base, chartOnly);
         return;
       }
       refreshing = true;
       dispatch(refreshInPlace(id, { history, charts }))
-        .catch(error => logging.warn('Live dashboard refresh failed', error))
-        .finally(() => {
+        .catch((error): RefreshResult | 'failed' => {
+          logging.warn('Live dashboard refresh failed', error);
+          return 'failed';
+        })
+        .then(result => {
           refreshing = false;
-          // re-baseline the chart digest against the copy now loaded
-          if (!disposed) subscribe(true);
+          if (disposed || result === 'gone') return;
+          if (result === 'applied') {
+            failures = 0;
+            // re-baseline the chart digest against the copy now loaded
+            subscribe(true);
+          } else {
+            retry();
+          }
         });
     };
 
@@ -246,7 +368,9 @@ export function useDashboardLive(dashboardUuid: string) {
         document.addEventListener('visibilitychange', onVisible);
         return;
       }
-      if (isMidAction() || refreshing || previewing()) {
+      // a write of this tab's or an open preview: a copy fetched now could
+      // undo the write or replace the snapshot on screen
+      if (isMidAction() || refreshing || holding()) {
         if (isMidAction() && !pending.deferred) notify(true);
         timer = setTimeout(attempt, MID_ACTION_POLL_MS);
         return;
@@ -260,11 +384,18 @@ export function useDashboardLive(dashboardUuid: string) {
       attempt();
     }
 
-    const schedule = (ev: DashboardChanged) => {
+    const schedule = (ev: DashboardChanged, chart: boolean) => {
       const first = !pending;
       if (!pending)
-        pending = { charts: [], etag: null, deferred: false, saved: false };
+        pending = {
+          charts: [],
+          etag: null,
+          deferred: false,
+          saved: false,
+          chartOnly: true,
+        };
       if (ev.reason !== 'access') pending.saved = true;
+      pending.chartOnly = pending.chartOnly && chart;
       pending.charts.push(...(ev.charts ?? []).map(c => c.id));
       // the newest dashboard version, unless any other reason is waiting
       pending.etag =
@@ -280,6 +411,9 @@ export function useDashboardLive(dashboardUuid: string) {
       if (isGone()) return;
       const { dashboardInfo, dashboardState } = store.getState();
       const versions = dashboardInfo.versions ?? NO_VERSIONS;
+      const dirty = isDirty();
+      // permissions are re-read by the refresh once the editor is clean
+      if (ev.reason === 'access' && dirty) accessPending = true;
       const outcome = classifyEvent(ev, {
         holding: false,
         versions,
@@ -298,6 +432,11 @@ export function useDashboardLive(dashboardUuid: string) {
       if (outcome === 'ignore') return;
 
       const v = versionOf(ev.etag ?? null);
+      // a chart's save: the dashboard's own version did not move
+      const chart =
+        ev.reason === 'chart' ||
+        (ev.reason === 'catch-up' &&
+          (v === null || v === versions.base || v === versions.latest));
       if (
         (ev.reason === 'dashboard' || ev.reason === 'catch-up') &&
         v &&
@@ -315,29 +454,48 @@ export function useDashboardLive(dashboardUuid: string) {
       if (outcome === 'unavailable') {
         gone = true;
         cancel();
+        // Unsaved work stays on screen (the page is replaced only once it
+        // is clean), with a notice that stays until closed.
+        if (dirty)
+          dispatch(
+            addDangerToast(deletedWhileEditingMessage(), { duration: 0 }),
+          );
         setLive(s => ({ ...s, notice: null, unavailable: true }));
       } else if (outcome === 'prompt' || outcome === 'badge') {
-        tellEditor(versions.base);
+        tellEditor(versions.base, chart);
       } else {
-        schedule(ev);
+        schedule(ev, chart);
       }
     };
 
     // Own writes (a version restore among them): hold, then judge once the
     // write's new version is adopted. An open version preview: hold until
     // it closes, so the snapshot on screen is not replaced under it.
-    const receive = (ev: DashboardChanged) => {
-      if (ev.uuid !== dashboardUuid) return;
-      if (holding()) held.push(ev);
-      else process(ev);
-    };
     const release = () => {
       if (disposed || holding() || !held.length) return;
       const events = held;
       held = [];
       events.forEach(process);
     };
-    const offSettled = subscribeOwnWritesSettled(release);
+    const receive = (ev: DashboardChanged) => {
+      if (ev.uuid !== dashboardUuid) return;
+      if (!holding()) {
+        process(ev);
+        return;
+      }
+      held.push(ev);
+      // a write that never settles: let go, and ask for anything missed
+      capTimer ??= setTimeout(() => {
+        capTimer = undefined;
+        if (!held.length || ownWritesInFlight() === 0) return;
+        release();
+        subscribe();
+      }, OWN_WRITE_HOLD_MS);
+    };
+    const offSettled = subscribeOwnWritesSettled(() => {
+      writesSeen = null;
+      release();
+    });
 
     let wasEditing = Boolean(store.getState().dashboardState.editMode);
     let lastBase = (store.getState().dashboardInfo.versions ?? NO_VERSIONS)
@@ -347,21 +505,27 @@ export function useDashboardLive(dashboardUuid: string) {
       const editing = Boolean(dashboardState.editMode);
       const { base } = dashboardInfo.versions ?? NO_VERSIONS;
       // discarded, saved (the base moved) or left edit mode: start over
-      if (
-        promptedBase !== undefined &&
-        ((wasEditing && !editing) || base !== lastBase)
-      ) {
+      if (told && ((wasEditing && !editing) || base !== lastBase)) {
+        told = false;
         promptedBase = undefined;
         reads += 1;
         setLive(s => ({
           ...s,
           prompt: false,
           badgeCount: 0,
+          chartOnly: false,
           summary: undefined,
         }));
       }
       wasEditing = editing;
       lastBase = base;
+      if (accessPending && !isDirty()) {
+        accessPending = false;
+        setTimeout(() => {
+          if (!disposed)
+            receive({ uuid: dashboardUuid, reason: 'access', spread_ms: 0 });
+        }, 0);
+      }
       // a preview closed: judge after its own re-hydrate has landed
       if (held.length && !holding()) setTimeout(release, 0);
     });
@@ -372,8 +536,7 @@ export function useDashboardLive(dashboardUuid: string) {
     const offSubscribed = subscribeRealtime('subscribed', payload => {
       const reply = (payload ?? {}) as Subscribed;
       if (reply.dashboard !== dashboardUuid) return;
-      const again = rebaseline;
-      rebaseline = false;
+      const again = sent.shift() ?? false;
       if (!reply.ok) {
         // gone or no longer allowed: the refresh's re-fetch says which
         if (reply.why === 'not_found' && !again)
@@ -397,12 +560,18 @@ export function useDashboardLive(dashboardUuid: string) {
         spread_ms: 0,
       });
     });
-    const offOpen = subscribeRealtimeOpen(() => subscribe());
+    const offOpen = subscribeRealtimeOpen(() => {
+      // replies to subscribes sent on the old socket never come
+      sent.length = 0;
+      subscribe();
+    });
     subscribe();
 
     return () => {
       disposed = true;
       cancel();
+      clearTimeout(retryTimer);
+      clearTimeout(capTimer);
       offSettled();
       offStore();
       offChanged();
@@ -431,9 +600,11 @@ export function useDashboardLive(dashboardUuid: string) {
     // leaving edit mode resets the prompt and the badge (the store listener)
     dispatch(setEditMode(false));
     return dispatch(refreshInPlace(id, { history, charts: [] }))
-      .then(() => {
+      .then(result => {
         // the edits must not come back through undo
-        dispatch(clearDashboardHistory());
+        if (result === 'applied') dispatch(clearDashboardHistory());
+        // not applied (a write of this tab's is out): load the page afresh
+        else if (result === 'skipped') reloadWithoutEdits();
       })
       .catch(error => {
         // the edited copy must not stay on screen looking saved

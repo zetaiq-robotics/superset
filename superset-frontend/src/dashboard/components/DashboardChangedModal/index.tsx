@@ -24,6 +24,8 @@ type Props = {
   show: boolean;
   /** who saved and when; null when the history could not be read */
   summary: StaleSummary;
+  /** only charts changed (opened from the badge) */
+  chartOnly?: boolean;
   onDiscard: () => void;
   onKeepEditing: () => void;
 };
@@ -32,6 +34,7 @@ type Props = {
 export default function DashboardChangedModal({
   show,
   summary,
+  chartOnly = false,
   onDiscard,
   onKeepEditing,
 }: Props) {
@@ -52,16 +55,21 @@ export default function DashboardChangedModal({
         </>
       }
     >
-      <p>
-        {summary
-          ? t(
-              '%s saved a newer version at %s.',
-              summary.changedBy,
-              summary.changedAt,
-            )
-          : t('Someone saved a newer version.')}{' '}
-        {t('Your unsaved changes are based on the older one.')}
-      </p>
+      {chartOnly ? (
+        // a chart's save: the editor's dashboard save is not refused
+        <p>{t('A chart on this dashboard was changed.')}</p>
+      ) : (
+        <p>
+          {summary
+            ? t(
+                '%s saved a newer version at %s.',
+                summary.changedBy,
+                summary.changedAt,
+              )
+            : t('Someone saved a newer version.')}{' '}
+          {t('Your unsaved changes are based on the older one.')}
+        </p>
+      )}
     </Modal>
   );
 }

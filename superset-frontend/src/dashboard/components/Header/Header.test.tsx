@@ -560,7 +560,13 @@ test('edit mode shows the newer-version badge, which offers the choices again', 
   const open = jest.fn();
   render(
     <LiveBadgeContext.Provider
-      value={{ count: 2, names: ['Priya', 'Ana'], open }}
+      value={{
+        count: 2,
+        names: ['Priya', 'Ana'],
+        chartOnly: false,
+        gone: false,
+        open,
+      }}
     >
       <div className="dashboard">
         <Header />
@@ -578,6 +584,50 @@ test('edit mode shows the newer-version badge, which offers the choices again', 
     }),
   );
   expect(open).toHaveBeenCalledTimes(1);
+});
+
+test('deleted while editing: Save and Save as are not offered', async () => {
+  render(
+    <LiveBadgeContext.Provider
+      value={{
+        count: 0,
+        names: [],
+        chartOnly: false,
+        gone: true,
+        open: jest.fn(),
+      }}
+    >
+      <div className="dashboard">
+        <Header />
+      </div>
+    </LiveBadgeContext.Provider>,
+    {
+      useRedux: true,
+      useTheme: true,
+      initialState: {
+        ...initialState,
+        ...editableState,
+        dashboardState: {
+          ...editableState.dashboardState,
+          hasUnsavedChanges: true,
+        },
+      },
+    },
+  );
+  // a save would 404: the dashboard is gone
+  const save = screen.getByText('Save').closest('button')!;
+  expect(save).toBeDisabled();
+  await userEvent.hover(save.parentElement!);
+  expect(
+    await screen.findByText(
+      "This dashboard was deleted while you were editing. Your changes stay on screen, but they can't be saved unless the dashboard is restored.",
+    ),
+  ).toBeInTheDocument();
+  // the edits can still be thrown away
+  expect(screen.getByRole('button', { name: /discard/i })).toBeEnabled();
+
+  await openActionsDropdown();
+  expect(screen.queryByText('Save as')).not.toBeInTheDocument();
 });
 
 test('no badge without a newer version', () => {

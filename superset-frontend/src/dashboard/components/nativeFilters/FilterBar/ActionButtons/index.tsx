@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: the Apply button has a stable class that live refresh
+ * reads to tell unapplied filter changes (data-test is stripped in builds).
  */
 import { useMemo } from 'react';
 import { t } from '@apache-superset/core/translation';
@@ -153,6 +156,7 @@ const ActionButtons = ({
         htmlType="submit"
         css={(theme: SupersetTheme) => applyButtonStyle(theme, isVertical)}
         onClick={onApply}
+        className="filter-bar__apply-button"
         {...getFilterBarTestId('apply-button')}
       >
         {isVertical ? t('Apply filters') : t('Apply')}

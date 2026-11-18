@@ -19,6 +19,8 @@
  * Modified by ZetaIQ: a `dashboard.nav.left` extension renders before the title.
  * Modified by ZetaIQ: renders the stale-save modal.
  * Modified by ZetaIQ: the "Newer version available" badge in edit mode.
+ * Modified by ZetaIQ: no Save or Save as for a dashboard deleted while it
+ * was being edited (both would 404).
  */
 /* eslint-env browser */
 import {
@@ -82,7 +84,10 @@ import DashboardEmbedModal from '../EmbeddedModal';
 import OverwriteConfirm from '../OverwriteConfirm';
 import DashboardStaleSave from '../StaleSaveModal';
 import NewerVersionBadge from '../NewerVersionBadge';
-import { LiveBadgeContext } from 'src/dashboard/live/useDashboardLive';
+import {
+  deletedWhileEditingMessage,
+  LiveBadgeContext,
+} from 'src/dashboard/live/useDashboardLive';
 import {
   addDangerToast,
   addSuccessToast,
@@ -535,7 +540,8 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
     handleSaveAndCloseModal,
   } = useUnsavedChangesPrompt({
     hasUnsavedChanges,
-    onSave: overwriteDashboard,
+    // deleted while being edited: the leave prompt's Save would 404
+    onSave: liveBadge.gone ? () => {} : overwriteDashboard,
   });
 
   const showPropertiesModal = useCallback(() => {
@@ -718,6 +724,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
                 <NewerVersionBadge
                   count={liveBadge.count}
                   names={liveBadge.names}
+                  chartOnly={liveBadge.chartOnly}
                   onClick={liveBadge.open}
                 />
                 <div className="undoRedo">
@@ -778,18 +785,37 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
                 >
                   {hasUnsavedChanges ? t('Discard') : t('Exit edit mode')}
                 </Button>
-                <Button
-                  css={saveBtnStyle}
-                  buttonSize="small"
-                  disabled={!hasUnsavedChanges}
-                  buttonStyle="primary"
-                  onClick={overwriteDashboard}
-                  data-test="header-save-button"
-                  aria-label={t('Save')}
-                >
-                  <Icons.SaveOutlined iconSize="m" />
-                  {t('Save')}
-                </Button>
+                {liveBadge.gone ? (
+                  // deleted while being edited: a save would 404
+                  <Tooltip title={deletedWhileEditingMessage()}>
+                    <span>
+                      <Button
+                        css={saveBtnStyle}
+                        buttonSize="small"
+                        disabled
+                        buttonStyle="primary"
+                        data-test="header-save-button"
+                        aria-label={t('Save')}
+                      >
+                        <Icons.SaveOutlined iconSize="m" />
+                        {t('Save')}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <Button
+                    css={saveBtnStyle}
+                    buttonSize="small"
+                    disabled={!hasUnsavedChanges}
+                    buttonStyle="primary"
+                    onClick={overwriteDashboard}
+                    data-test="header-save-button"
+                    aria-label={t('Save')}
+                  >
+                    <Icons.SaveOutlined iconSize="m" />
+                    {t('Save')}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -861,7 +887,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
     hasUnsavedChanges,
     userCanEdit,
     userCanShare,
-    userCanSave: userCanSaveAs,
+    userCanSave: userCanSaveAs && !liveBadge.gone,
     userCanCurate,
     userCanExport,
     isLoading,

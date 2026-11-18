@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test for the Apply button's stable class.
  */
 import { render, screen, userEvent } from 'spec/helpers/testing-library';
 import ActionButtons from './index';
@@ -74,4 +76,13 @@ test('should apply', () => {
   expect(mockedProps.onApply).not.toHaveBeenCalled();
   userEvent.click(applyBtn);
   expect(mockedProps.onApply).toHaveBeenCalled();
+});
+
+test('the Apply button carries a class that survives production builds', () => {
+  render(<ActionButtons {...createProps()} />, { useRedux: true });
+  // live refresh reads it to tell unapplied filter changes; data-test is
+  // stripped from production builds
+  expect(screen.getByText('Apply filters').closest('button')).toHaveClass(
+    'filter-bar__apply-button',
+  );
 });
