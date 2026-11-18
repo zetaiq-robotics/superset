@@ -16,7 +16,7 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
-<!-- Modified by ZetaIQ: identity from the gateway's bearer token checked by introspection replaces the JWT cookie. -->
+<!-- Modified by ZetaIQ: identity from the gateway's bearer token checked by introspection replaces the JWT cookie; per-dashboard subscriptions. -->
 
 # Superset WebSocket Server
 
@@ -149,6 +149,31 @@ token and is bound to the same person channel. A one-shot catch-up fetch on
 reconnect reconciles any events missed while disconnected. There is no
 recurring poll while the socket is connected.
 
+### Dashboard subscriptions
+
+A socket asks to hear about one dashboard with
+`{"type":"subscribe","dashboard":"<uuid>"}` and stops with
+`{"type":"unsubscribe","dashboard":"<uuid>"}`. Only `type` and `dashboard`
+are read; the uuid must be 8-4-4-4-12 hex (any case, lowercased).
+
+- The server asks Superset, `GET <ACCESS_CHECK_URL>/<uuid>` with the socket's
+  own bearer token (5 s timeout, no redirects). `200 {etag, charts_digest}`
+  subscribes the socket under `t:<tenant>:d:<uuid>`, where `<tenant>` is the
+  socket's introspected tenant. `401`, `403` and `404` all answer
+  `not_found`; anything else answers `unavailable`.
+- Every subscribe gets one reply:
+  `{"topic":"subscribed","payload":{"dashboard","ok","etag","charts_digest","why"}}`,
+  `why` one of `invalid`, `limit`, `not_found`, `unavailable` (else `null`).
+  Subscribing again to a held dashboard re-checks it and replies with the
+  current ETag; a refused re-check drops it. A subscribe for a dashboard
+  whose check is still in flight starts no new check: that check's one reply
+  answers it. Unsubscribe has no reply and is idempotent.
+- At most `maxSubscriptionsPerSocket` dashboards per socket, counting checks
+  still in flight; one more answers `limit`. A check that finishes after its
+  dashboard was unsubscribed or its socket closed is dropped silently.
+- A frame over 1 KB closes the socket `1009`; more than 10 frames within any
+  1 s closes it `1008`. Unknown types and malformed JSON are ignored.
+
 ### Connection Management
 
 The server uses standard WebSocket
@@ -216,6 +241,8 @@ image, review these before exposing it publicly:
 | -------------------------- | ----------------------------- | -------- | ----- |
 | `introspectUrl`            | `INTROSPECT_URL`              | (none)   | Full URL of the control plane's token introspection endpoint. Required: the server exits at start-up without it. |
 | `introspectIntervalMs`     | `INTROSPECT_INTERVAL_MS`      | `60000`  | Re-introspection interval per socket; values below `5000` are raised to `5000`. |
+| `accessCheckUrl`           | `ACCESS_CHECK_URL`            | (none)   | Superset's dashboard access check, called as `GET <url>/<uuid>`. Required: the server exits at start-up without it. |
+| `maxSubscriptionsPerSocket`| `MAX_SUBSCRIPTIONS_PER_SOCKET`| `4`      | Dashboards one socket may subscribe to; `0` disables. |
 | `maxSocketsPerPerson`      | `MAX_SOCKETS_PER_PERSON`      | `20`     | Open sockets per person on one replica; `0` disables. |
 | `maxTotalConnections`      | `MAX_TOTAL_CONNECTIONS`       | `10000`  | Open sockets per replica; `0` disables. |
 | `maxSocketBufferBytes`     | `MAX_SOCKET_BUFFER_BYTES`     | `1048576`| Outbound buffer cap per socket; `0` disables. |
@@ -316,6 +343,7 @@ an alternate entrypoint, so no separate image is required:
 ```bash
 docker run --rm -p 8080:8080 \
   -e INTROSPECT_URL="<control plane introspection URL>" \
+  -e ACCESS_CHECK_URL="<Superset dashboard access check URL>" \
   -e REDIS_HOST=<redis-host> \
   apache/superset:<tag> /app/docker/entrypoints/run-websocket.sh
 ```

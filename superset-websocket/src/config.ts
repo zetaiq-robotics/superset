@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: introspection settings and live-dashboard limits replace the JWT settings.
+// Modified by ZetaIQ: introspection settings, the dashboard access check and live-dashboard limits replace the JWT settings.
 
 import { readFileSync } from 'fs';
 import { merge as _merge } from 'lodash-es';
@@ -69,6 +69,9 @@ type ConfigType = {
   // Full URL of the control plane's token introspection endpoint.
   introspectUrl: string;
   introspectIntervalMs: number;
+  // Superset's dashboard access check; `GET <accessCheckUrl>/<uuid>`.
+  accessCheckUrl: string;
+  maxSubscriptionsPerSocket: number;
   maxSocketsPerPerson: number;
   realtimeChannelPrefix: string;
   allowedOrigins: string[];
@@ -88,6 +91,8 @@ function defaultConfig(): ConfigType {
     logFilename: 'app.log',
     introspectUrl: '',
     introspectIntervalMs: 60 * 1000,
+    accessCheckUrl: '',
+    maxSubscriptionsPerSocket: 4,
     realtimeChannelPrefix: '',
     allowedOrigins: [],
     socketResponseTimeoutMs: 60 * 1000,
@@ -213,6 +218,12 @@ function applyEnvOverrides(config: ConfigType): ConfigType {
       (config.introspectIntervalMs = toNonNegativeNumber(
         val,
         config.introspectIntervalMs,
+      )),
+    ACCESS_CHECK_URL: val => (config.accessCheckUrl = val),
+    MAX_SUBSCRIPTIONS_PER_SOCKET: val =>
+      (config.maxSubscriptionsPerSocket = toNonNegativeNumber(
+        val,
+        config.maxSubscriptionsPerSocket,
       )),
     MAX_SOCKETS_PER_PERSON: val =>
       (config.maxSocketsPerPerson = toNonNegativeNumber(

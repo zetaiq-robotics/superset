@@ -8,5 +8,6 @@
     "port": 8125,
     "globalTags": []
   },
-  "introspectUrl": "http://control-plane.test/internal/v1/auth/introspect"
+  "introspectUrl": "http://control-plane.test/internal/v1/auth/introspect",
+  "accessCheckUrl": "http://superset.test/api/v1/zeta_live"
 }

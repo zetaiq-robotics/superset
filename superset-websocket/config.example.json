@@ -24,5 +24,6 @@
     "sentinelPassword": ""
   },
   "introspectUrl": "http://zeta-control-plane:8081/internal/v1/auth/introspect",
+  "accessCheckUrl": "http://zeta-superset:8088/api/v1/zeta_live",
   "allowedOrigins": []
 }
