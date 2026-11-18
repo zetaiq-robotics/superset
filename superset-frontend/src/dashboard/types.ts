@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: version and stale-save state.
+ * Modified by ZetaIQ: version and stale-save state; `unavailable` after a live refresh 404s.
  */
 import {
   ChartCustomization,
@@ -124,6 +124,8 @@ export type DashboardState = {
   directPathToChild: string[];
   activeTabs: ActiveTabs;
   fullSizeChartId: number | null;
+  /** a live refresh found the dashboard deleted, unpublished or unshared */
+  unavailable?: boolean;
   isRefreshing: boolean;
   isFiltersRefreshing: boolean;
   hasUnsavedChanges: boolean;

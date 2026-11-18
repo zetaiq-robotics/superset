@@ -18,6 +18,7 @@
  *
  * Modified by ZetaIQ: a full save sends If-Match; a 412 opens the stale-save modal.
  * Modified by ZetaIQ: writes count as own writes, so live events wait for them.
+ * Modified by ZetaIQ: DASHBOARD_UNAVAILABLE, when a live refresh finds the dashboard gone.
  */
 /* eslint camelcase: 0 */
 import { ActionCreators as UndoActionCreators } from 'redux-undo';
@@ -1200,6 +1201,13 @@ export function setFullSizeChartId(
   chartId: number | null,
 ): SetFullSizeChartIdAction {
   return { type: SET_FULL_SIZE_CHART_ID, chartId };
+}
+
+/** A live refresh got 404: deleted, unpublished or no longer shared. */
+export const DASHBOARD_UNAVAILABLE = 'DASHBOARD_UNAVAILABLE';
+
+export function dashboardUnavailable(): { type: typeof DASHBOARD_UNAVAILABLE } {
+  return { type: DASHBOARD_UNAVAILABLE };
 }
 
 // ---------------------------------------------------------------------------

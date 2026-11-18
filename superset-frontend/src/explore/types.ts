@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: ChartState.liveRefresh.
  */
 import {
   QueryData,
@@ -63,6 +65,8 @@ export interface ChartState {
   queryController: AbortController | null;
   queriesResponse: QueryData[] | null;
   triggerQuery: boolean;
+  /** re-queried by a live refresh: keep the old result on screen while loading */
+  liveRefresh?: boolean;
 }
 
 export type OptionSortType = Partial<

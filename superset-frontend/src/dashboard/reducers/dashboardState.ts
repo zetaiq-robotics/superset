@@ -17,6 +17,8 @@
  * under the License.
  *
  * Modified by ZetaIQ: holds a full save refused as stale.
+ * Modified by ZetaIQ: `unavailable` after a live refresh 404s; a re-hydrate
+ * copies tabActivationTimes instead of mutating the previous state's.
  */
 /* eslint-disable camelcase */
 import { JsonObject } from '@superset-ui/core';
@@ -58,6 +60,7 @@ import {
   REMOVE_CHART_STATE,
   RESTORE_CHART_STATES,
   CLEAR_ALL_CHART_STATES,
+  DASHBOARD_UNAVAILABLE,
 } from '../actions/dashboardState';
 import { HYDRATE_DASHBOARD } from '../actions/hydrate';
 import {
@@ -106,6 +109,7 @@ interface DashboardStateShape {
   tabActivationTimes?: Record<string, number>;
   focusedFilterField?: { chartId: number; column: string } | null;
   fullSizeChartId?: number | null;
+  unavailable?: boolean;
   datasetsStatus?: string;
   overwriteConfirmMetadata?: JsonObject;
   nativeFiltersBarOpen?: boolean;
@@ -180,17 +184,22 @@ export default function dashboardStateReducer(
       const hydratedState: DashboardStateShape = {
         ...state,
         ...action.data?.dashboardState,
+        unavailable: false,
       };
       // Initialize tab activation times for initially active tabs
       if (hydratedState.activeTabs && hydratedState.activeTabs.length > 0) {
         const now = Date.now();
-        hydratedState.tabActivationTimes =
-          hydratedState.tabActivationTimes || {};
+        hydratedState.tabActivationTimes = {
+          ...hydratedState.tabActivationTimes,
+        };
         hydratedState.activeTabs.forEach((tabId: string) => {
           hydratedState.tabActivationTimes![tabId] = now;
         });
       }
       return hydratedState;
+    },
+    [DASHBOARD_UNAVAILABLE](): DashboardStateShape {
+      return { ...state, unavailable: true };
     },
     [ADD_SLICE](): DashboardStateShape {
       const updatedSliceIds = new Set(state.sliceIds);
