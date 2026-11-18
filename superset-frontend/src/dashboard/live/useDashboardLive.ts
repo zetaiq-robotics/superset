@@ -48,7 +48,11 @@ import {
   loadStaleSummary,
   StaleSummary,
 } from './changeSummary';
-import { classifyEvent, DashboardChanged } from './classifyEvent';
+import {
+  classifyEvent,
+  DashboardChanged,
+  UnavailableReason,
+} from './classifyEvent';
 import { refreshInPlace, RefreshResult } from './refreshInPlace';
 import {
   NO_VERSIONS,
@@ -60,8 +64,8 @@ import {
 
 /** What the page shows about live changes. */
 export type DashboardLiveState = {
-  /** the viewer toast currently standing for a pending refresh */
-  notice: 'updated' | 'updated-deferred' | null;
+  /** a refresh waits for the viewer to finish ("Update waiting") */
+  waiting: boolean;
   /** an editor with unsaved changes should see "Dashboard changed" */
   prompt: boolean;
   /** newer saves heard since the editor's base ("Newer version available") */
@@ -78,7 +82,7 @@ export type DashboardLiveState = {
 };
 
 const IDLE: DashboardLiveState = {
-  notice: null,
+  waiting: false,
   prompt: false,
   badgeCount: 0,
   chartOnly: false,
@@ -102,6 +106,8 @@ export type LiveBadge = {
   chartOnly: boolean;
   /** the dashboard is gone: Save and Save as are not offered */
   gone: boolean;
+  /** a refresh waits for the viewer to finish */
+  waiting: boolean;
   open: () => void;
 };
 export const LiveBadgeContext = createContext<LiveBadge>({
@@ -109,6 +115,7 @@ export const LiveBadgeContext = createContext<LiveBadge>({
   names: [],
   chartOnly: false,
   gone: false,
+  waiting: false,
   open: () => {},
 });
 
@@ -207,6 +214,8 @@ export function useDashboardLive(dashboardUuid: string) {
       saved: boolean;
       /** every event was a chart's save */
       chartOnly: boolean;
+      /** why the page goes away if the refresh answers 404 */
+      reason?: UnavailableReason;
     } | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let refreshing = false;
@@ -306,19 +315,14 @@ export function useDashboardLive(dashboardUuid: string) {
       );
     };
 
-    const notify = (deferred: boolean) => {
-      pending!.deferred = deferred;
+    // The viewer is mid-action: told now, refreshed when they are done.
+    // A refresh that is not deferred is told once it has applied.
+    const defer = () => {
+      pending!.deferred = true;
       dispatch(
-        addInfoToast(
-          deferred
-            ? t("Dashboard updated. It will refresh when you're done.")
-            : t('Dashboard updated'),
-        ),
+        addInfoToast(t("Dashboard updated. It will refresh when you're done.")),
       );
-      setLive(s => ({
-        ...s,
-        notice: deferred ? 'updated-deferred' : 'updated',
-      }));
+      setLive(s => ({ ...s, waiting: true }));
     };
 
     const cancel = () => {
@@ -330,9 +334,9 @@ export function useDashboardLive(dashboardUuid: string) {
 
     const fire = () => {
       const { id, versions = NO_VERSIONS } = store.getState().dashboardInfo;
-      const { charts, etag, saved, chartOnly } = pending!;
+      const { charts, etag, saved, chartOnly, deferred, reason } = pending!;
       pending = null;
-      setLive(s => ({ ...s, notice: null }));
+      setLive(s => ({ ...s, waiting: false }));
       if (isGone()) return;
       // a refresh in flight already brought this version in
       if (etag && versionOf(etag) === versions.base) return;
@@ -342,7 +346,7 @@ export function useDashboardLive(dashboardUuid: string) {
         return;
       }
       refreshing = true;
-      dispatch(refreshInPlace(id, { history, charts }))
+      dispatch(refreshInPlace(id, { history, charts, reason }))
         .catch((error): RefreshResult | 'failed' => {
           logging.warn('Live dashboard refresh failed', error);
           return 'failed';
@@ -352,6 +356,7 @@ export function useDashboardLive(dashboardUuid: string) {
           if (disposed || result === 'gone') return;
           if (result === 'applied') {
             failures = 0;
+            if (!deferred) dispatch(addInfoToast(t('Dashboard updated')));
             // re-baseline the chart digest against the copy now loaded
             subscribe(true);
           } else {
@@ -371,7 +376,7 @@ export function useDashboardLive(dashboardUuid: string) {
       // a write of this tab's or an open preview: a copy fetched now could
       // undo the write or replace the snapshot on screen
       if (isMidAction() || refreshing || holding()) {
-        if (isMidAction() && !pending.deferred) notify(true);
+        if (isMidAction() && !pending.deferred) defer();
         timer = setTimeout(attempt, MID_ACTION_POLL_MS);
         return;
       }
@@ -395,6 +400,9 @@ export function useDashboardLive(dashboardUuid: string) {
           chartOnly: true,
         };
       if (ev.reason !== 'access') pending.saved = true;
+      // a 404 after an unpublish or an access change: most likely why
+      if (ev.reason === 'unpublished') pending.reason = 'unpublished';
+      else if (ev.reason === 'access') pending.reason ??= 'access';
       pending.chartOnly = pending.chartOnly && chart;
       pending.charts.push(...(ev.charts ?? []).map(c => c.id));
       // the newest dashboard version, unless any other reason is waiting
@@ -403,7 +411,7 @@ export function useDashboardLive(dashboardUuid: string) {
           ? (ev.etag ?? null)
           : null;
       if (!first) return;
-      notify(isMidAction());
+      if (isMidAction()) defer();
       timer = setTimeout(attempt, Math.random() * (ev.spread_ms ?? 0));
     };
 
@@ -424,7 +432,7 @@ export function useDashboardLive(dashboardUuid: string) {
         promptedBase,
       });
       if (
-        ev.reason === 'dashboard' &&
+        (ev.reason === 'dashboard' || ev.reason === 'unpublished') &&
         ev.version != null &&
         (maxVersion === null || ev.version > maxVersion)
       )
@@ -438,7 +446,9 @@ export function useDashboardLive(dashboardUuid: string) {
         (ev.reason === 'catch-up' &&
           (v === null || v === versions.base || v === versions.latest));
       if (
-        (ev.reason === 'dashboard' || ev.reason === 'catch-up') &&
+        (ev.reason === 'dashboard' ||
+          ev.reason === 'unpublished' ||
+          ev.reason === 'catch-up') &&
         v &&
         v !== versions.base &&
         v !== versions.latest
@@ -460,7 +470,7 @@ export function useDashboardLive(dashboardUuid: string) {
           dispatch(
             addDangerToast(deletedWhileEditingMessage(), { duration: 0 }),
           );
-        setLive(s => ({ ...s, notice: null, unavailable: true }));
+        setLive(s => ({ ...s, waiting: false, unavailable: true }));
       } else if (outcome === 'prompt' || outcome === 'badge') {
         tellEditor(versions.base, chart);
       } else {

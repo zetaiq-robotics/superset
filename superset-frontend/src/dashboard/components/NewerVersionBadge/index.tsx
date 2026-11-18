@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Button, Tooltip } from '@superset-ui/core/components';
+import { Button, Label, Tooltip } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
 
 type Props = {
@@ -62,5 +62,22 @@ export default function NewerVersionBadge({
     </Tooltip>
   ) : (
     badge
+  );
+}
+
+/**
+ * Beside the title in view mode while a refresh waits for the viewer to
+ * finish (spec §7.7). Says so once to assistive tech; does nothing on click.
+ */
+export function UpdateWaiting() {
+  return (
+    // eslint-disable-next-line jsx-a11y/prefer-tag-over-role
+    <span role="status" data-test="update-waiting">
+      <Tooltip
+        title={t("This dashboard changed. It will refresh when you're done.")}
+      >
+        <Label type="info">{t('Update waiting')}</Label>
+      </Tooltip>
+    </span>
   );
 }

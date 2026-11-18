@@ -441,6 +441,19 @@ test('404 → DASHBOARD_UNAVAILABLE', async () => {
   ]);
 });
 
+test('404 keeps the reason of the event that led to it', async () => {
+  const store = setup();
+  fetchMock.get(`glob:*/api/v1/dashboard/${ID}?q=*`, 404);
+  fetchMock.get(`glob:*/api/v1/dashboard/${ID}/charts`, 404);
+  await store.dispatch(
+    refreshInPlace(ID, { history, charts: [], reason: 'unpublished' }) as any,
+  );
+  expect(store.getState().dashboardState).toMatchObject({
+    unavailable: true,
+    unavailableReason: 'unpublished',
+  });
+});
+
 test('clean edit mode refreshes and stays in edit mode', async () => {
   const store = setup();
   store.dispatch(setEditMode(true));

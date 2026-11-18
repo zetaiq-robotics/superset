@@ -21,6 +21,7 @@
  * Modified by ZetaIQ: the "Newer version available" badge in edit mode.
  * Modified by ZetaIQ: no Save or Save as for a dashboard deleted while it
  * was being edited (both would 404).
+ * Modified by ZetaIQ: "Update waiting" beside the title while a refresh waits.
  */
 /* eslint-env browser */
 import {
@@ -83,7 +84,7 @@ import { selectIsDashboardVersionPreviewActive } from 'src/features/versionHisto
 import DashboardEmbedModal from '../EmbeddedModal';
 import OverwriteConfirm from '../OverwriteConfirm';
 import DashboardStaleSave from '../StaleSaveModal';
-import NewerVersionBadge from '../NewerVersionBadge';
+import NewerVersionBadge, { UpdateWaiting } from '../NewerVersionBadge';
 import {
   deletedWhileEditingMessage,
   LiveBadgeContext,
@@ -697,10 +698,12 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
           userCanSave={userCanSaveAs}
         />
       ),
+      !editMode && liveBadge.waiting && <UpdateWaiting key="update-waiting" />,
       !editMode && !isEmbedded && !isMobile && metadataBar,
     ],
     [
       boundActionCreators.savePublished,
+      liveBadge.waiting,
       dashboardInfo.id,
       editMode,
       isMobile,

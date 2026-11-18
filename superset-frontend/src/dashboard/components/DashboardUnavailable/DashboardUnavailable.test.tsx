@@ -16,12 +16,40 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { render, screen } from 'spec/helpers/testing-library';
+import { render, screen, userEvent } from 'spec/helpers/testing-library';
 import DashboardUnavailable from '.';
 
-test('says the dashboard is gone', () => {
-  render(<DashboardUnavailable />);
-  expect(
-    screen.getByText('This dashboard is no longer available.'),
-  ).toBeInTheDocument();
+test.each([
+  [
+    'deleted',
+    'This dashboard was deleted.',
+    'Someone who manages it can restore it from the archive.',
+  ],
+  [
+    'unpublished',
+    'This dashboard was moved back to draft.',
+    'Only its editors can see it until it is published again.',
+  ],
+  [
+    'access',
+    'You no longer have access to this dashboard.',
+    'Ask its owner to share it with you again.',
+  ],
+  [
+    undefined,
+    'This dashboard is no longer available to you.',
+    'It may have been deleted, moved to draft, or no longer shared with you.',
+  ],
+] as const)('reason %s says why', (reason, heading, line) => {
+  render(<DashboardUnavailable reason={reason} />, { useRouter: true });
+  expect(screen.getByText(heading)).toBeInTheDocument();
+  expect(screen.getByText(line)).toBeInTheDocument();
+});
+
+test('"Back to dashboards" goes to the dashboard list inside the app', async () => {
+  render(<DashboardUnavailable reason="deleted" />, { useRouter: true });
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Back to dashboards' }),
+  );
+  expect(window.location.pathname).toBe('/dashboard/list/');
 });

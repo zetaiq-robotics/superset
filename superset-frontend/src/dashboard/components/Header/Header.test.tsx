@@ -18,6 +18,7 @@
  *
  * Modified by ZetaIQ: a test for the `dashboard.nav.left` extension.
  * Modified by ZetaIQ: a test for the "Newer version available" badge.
+ * Modified by ZetaIQ: a test for the "Update waiting" chip.
  */
 // Imported first: loading this before 'spec/helpers/testing-library' or
 // '@superset-ui/core' ensures mockAntdWithDesktopBreakpoint is defined
@@ -565,6 +566,7 @@ test('edit mode shows the newer-version badge, which offers the choices again', 
         names: ['Priya', 'Ana'],
         chartOnly: false,
         gone: false,
+        waiting: false,
         open,
       }}
     >
@@ -594,6 +596,7 @@ test('deleted while editing: Save and Save as are not offered', async () => {
         names: [],
         chartOnly: false,
         gone: true,
+        waiting: false,
         open: jest.fn(),
       }}
     >
@@ -628,6 +631,45 @@ test('deleted while editing: Save and Save as are not offered', async () => {
 
   await openActionsDropdown();
   expect(screen.queryByText('Save as')).not.toBeInTheDocument();
+});
+
+test('a waiting refresh shows "Update waiting" beside the title, said once', async () => {
+  const live = (waiting: boolean) => (
+    <LiveBadgeContext.Provider
+      value={{
+        count: 0,
+        names: [],
+        chartOnly: false,
+        gone: false,
+        waiting,
+        open: jest.fn(),
+      }}
+    >
+      <div className="dashboard">
+        <Header />
+      </div>
+    </LiveBadgeContext.Provider>
+  );
+  const { rerender } = render(live(true), {
+    useRedux: true,
+    useTheme: true,
+    initialState,
+  });
+  const chip = screen.getByText('Update waiting');
+  expect(chip.closest('[role="status"]')).toBeInTheDocument();
+  // not a control
+  expect(
+    screen.queryByRole('button', { name: 'Update waiting' }),
+  ).not.toBeInTheDocument();
+  await userEvent.hover(chip);
+  expect(
+    await screen.findByText(
+      "This dashboard changed. It will refresh when you're done.",
+    ),
+  ).toBeInTheDocument();
+
+  rerender(live(false));
+  expect(screen.queryByText('Update waiting')).not.toBeInTheDocument();
 });
 
 test('no badge without a newer version', () => {
