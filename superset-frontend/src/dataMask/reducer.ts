@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a live refresh (HYDRATE_DASHBOARD with `live`) installs the mask it
+ * carried as is, so removed filters and removed charts' entries stay gone.
  */
 
 /* eslint-disable no-param-reassign */
@@ -74,6 +77,8 @@ export interface HydrateDataMaskAction {
     };
     dataMask?: DataMaskStateWithId;
   };
+  /** an in-place refresh: `data.dataMask` is already carried */
+  live?: boolean;
 }
 
 function isChartCustomizationItem(item: unknown): item is ChartCustomization {
@@ -270,6 +275,9 @@ const dataMaskReducer = produce(
         return draft;
       case HYDRATE_DASHBOARD: {
         const hydrateDashboardAction = action as HydrateDataMaskAction;
+        if (hydrateDashboardAction.live) {
+          return hydrateDashboardAction.data.dataMask ?? cleanState;
+        }
         const metadata = hydrateDashboardAction.data.dashboardInfo?.metadata;
         const loadedDataMask = hydrateDashboardAction.data.dataMask;
 

@@ -17,6 +17,8 @@
  * under the License.
  *
  * Modified by ZetaIQ: the builder pane collapses and the grid takes its width.
+ * Modified by ZetaIQ: only an editor adding a tab is moved to it; a viewer
+ * whose dashboard gains a tab by live refresh stays where they are.
  */
 /* eslint-env browser */
 import cx from 'classnames';
@@ -730,6 +732,7 @@ const DashboardBuilder = () => {
     const newTabsLength = topLevelTabs?.children?.length;
 
     if (
+      editMode &&
       currentTabsLength !== undefined &&
       newTabsLength !== undefined &&
       newTabsLength > currentTabsLength

@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a chart re-queried by a live refresh keeps its old result
+ * on screen while loading, as auto-refresh does.
  */
 import cx from 'classnames';
 import {
@@ -254,7 +257,8 @@ const Chart = (props: ChartProps) => {
       (state.dashboardInfo?.metadata as JsonObject)?.show_chart_timestamps ??
       false,
   );
-  const suppressLoadingSpinner = useIsChartAutoRefreshing(props.id);
+  const suppressLoadingSpinner =
+    useIsChartAutoRefreshing(props.id) || Boolean(chart?.liveRefresh);
 
   const isCached: boolean[] = useMemo(
     () =>

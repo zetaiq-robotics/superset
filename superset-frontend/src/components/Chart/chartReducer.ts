@@ -15,6 +15,8 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a live re-query's end clears `liveRefresh` (spinner suppression).
  */
 /* eslint camelcase: 0 */
 import { t } from '@apache-superset/core/translation';
@@ -60,6 +62,7 @@ export default function chartReducer(
     [actions.CHART_UPDATE_SUCCEEDED](state) {
       return {
         ...state,
+        liveRefresh: false,
         chartStatus: 'success',
         chartAlert: null,
         queriesResponse: action.queriesResponse,
@@ -88,6 +91,7 @@ export default function chartReducer(
       return {
         ...state,
         chartStatus: 'stopped',
+        liveRefresh: false,
         chartAlert: t('Updating chart was stopped'),
         chartUpdateEndTime: now(),
         queryController: null,
@@ -110,6 +114,7 @@ export default function chartReducer(
     [actions.CHART_UPDATE_FAILED](state) {
       return {
         ...state,
+        liveRefresh: false,
         chartStatus: 'failed',
         chartAlert: action.queriesResponse
           ? action.queriesResponse?.[0]?.error
