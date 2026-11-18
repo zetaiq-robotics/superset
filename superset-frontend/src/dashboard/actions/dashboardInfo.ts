@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: version-tracking actions; a metadata save sends If-Match and retries once on a 412.
+ * Modified by ZetaIQ: writes count as own writes, so live events wait for them.
  */
 import { Dispatch } from 'redux';
 import { t } from '@apache-superset/core/translation';
@@ -33,6 +34,7 @@ import {
   ifMatch,
   noteNewer,
   NO_VERSIONS,
+  trackOwnWrite,
   Versions,
   versionOf,
 } from 'src/dashboard/live/versionTracker';
@@ -54,11 +56,13 @@ const putJsonMetadata = (
   metadata: JsonObject,
   base: string | null | undefined,
 ) =>
-  makeApi<Partial<DashboardInfo>, UpdateDashboardResponse>({
-    method: 'PUT',
-    endpoint: `/api/v1/dashboard/${id}`,
-    headers: ifMatch(base),
-  })({ json_metadata: JSON.stringify(metadata) });
+  trackOwnWrite(
+    makeApi<Partial<DashboardInfo>, UpdateDashboardResponse>({
+      method: 'PUT',
+      endpoint: `/api/v1/dashboard/${id}`,
+      headers: ifMatch(base),
+    })({ json_metadata: JSON.stringify(metadata) }),
+  );
 
 export const SET_DASHBOARD_VERSIONS = 'SET_DASHBOARD_VERSIONS';
 

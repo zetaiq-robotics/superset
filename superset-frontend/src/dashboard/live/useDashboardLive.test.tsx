@@ -1,0 +1,380 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+import { act, renderHook } from '@testing-library/react';
+import { createStore, createWrapper } from 'spec/helpers/testing-library';
+import reducerIndex from 'spec/helpers/reducerIndex';
+import {
+  adoptOwnWrite,
+  setDashboardVersions,
+} from 'src/dashboard/actions/dashboardInfo';
+import * as realtime from 'src/middleware/realtime';
+import { refreshInPlace } from './refreshInPlace';
+import { trackOwnWrite } from './versionTracker';
+import { useDashboardLive } from './useDashboardLive';
+
+jest.mock('src/middleware/realtime', () => {
+  // created here: other modules subscribe while being imported
+  const handlers: Record<string, (payload: unknown) => void> = {};
+  const openListeners = new Set<(mockReason: string) => void>();
+  return {
+    ...jest.requireActual('src/middleware/realtime'),
+    mockHandlers: handlers,
+    mockOpenListeners: openListeners,
+    sendRealtime: jest.fn(() => true),
+    subscribeRealtime: jest.fn(
+      (topic: string, handler: (payload: unknown) => void) => {
+        handlers[topic] = handler;
+        return () => {
+          delete handlers[topic];
+        };
+      },
+    ),
+    subscribeRealtimeOpen: jest.fn((listener: (mockReason: string) => void) => {
+      openListeners.add(listener);
+      return () => openListeners.delete(listener);
+    }),
+  };
+});
+
+jest.mock('./refreshInPlace', () => ({ refreshInPlace: jest.fn() }));
+
+const { mockHandlers, mockOpenListeners } = realtime as unknown as {
+  mockHandlers: Record<string, (payload: unknown) => void>;
+  mockOpenListeners: Set<(reason: string) => void>;
+};
+const send = realtime.sendRealtime as jest.Mock;
+const refresh = refreshInPlace as jest.Mock;
+
+// the version the server holds; the stub refresh moves the tab to it
+let mockLive = 'v1';
+let visibility: DocumentVisibilityState = 'visible';
+
+const ID = 7;
+const UUID = 'd1';
+
+const setup = () => {
+  const store = createStore(
+    {
+      dashboardInfo: {
+        id: ID,
+        uuid: UUID,
+        versions: { base: 'v1', latest: 'v1' },
+      },
+      dashboardState: { editMode: false, hasUnsavedChanges: false },
+      messageToasts: [],
+    },
+    reducerIndex,
+  );
+  const hook = renderHook(() => useDashboardLive(UUID), {
+    wrapper: createWrapper({ store, useRouter: true }),
+  });
+  return { store, hook };
+};
+
+const toasts = (store: ReturnType<typeof createStore>) =>
+  (
+    store.getState() as unknown as { messageToasts: { text: string }[] }
+  ).messageToasts.map(toast => toast.text);
+
+const changed = (etag: string, version: number, spread_ms = 1000) =>
+  act(() => {
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      etag,
+      version,
+      reason: 'dashboard',
+      spread_ms,
+    });
+  });
+
+// only the hook's own listener: modules imported by the test add theirs
+const reconnect = () =>
+  act(() => Array.from(mockOpenListeners).pop()!('reconnect'));
+
+const advance = (ms: number) =>
+  act(async () => {
+    jest.advanceTimersByTime(ms);
+  });
+
+const setVisibility = (state: DocumentVisibilityState) =>
+  act(() => {
+    visibility = state;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+
+beforeAll(() => {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => visibility,
+  });
+});
+
+beforeEach(() => {
+  jest.useFakeTimers();
+  jest.spyOn(Math, 'random').mockReturnValue(0.5);
+  send.mockClear();
+  refresh.mockReset();
+  refresh.mockImplementation(
+    (id: number) => (dispatch: (action: unknown) => void) => {
+      dispatch(setDashboardVersions(id, { base: mockLive, latest: mockLive }));
+      return Promise.resolve();
+    },
+  );
+  mockLive = 'v1';
+  visibility = 'visible';
+  document.body.innerHTML = '';
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+test('subscribes on mount and unsubscribes on unmount', () => {
+  const before = mockOpenListeners.size;
+  const { hook } = setup();
+  expect(mockOpenListeners.size).toBe(before + 1);
+  expect(send).toHaveBeenCalledWith({ type: 'subscribe', dashboard: UUID });
+  expect(mockHandlers['dashboard.changed']).toBeDefined();
+  expect(mockHandlers.subscribed).toBeDefined();
+
+  hook.unmount();
+  expect(send).toHaveBeenLastCalledWith({
+    type: 'unsubscribe',
+    dashboard: UUID,
+  });
+  expect(mockHandlers['dashboard.changed']).toBeUndefined();
+  expect(mockOpenListeners.size).toBe(before);
+});
+
+test('re-subscribes on every reconnect', () => {
+  setup();
+  send.mockClear();
+  reconnect();
+  expect(send).toHaveBeenCalledWith({ type: 'subscribe', dashboard: UUID });
+});
+
+test('a viewer is told, then refreshed after the spread', async () => {
+  const { store } = setup();
+  mockLive = 'v2';
+  changed('v2', 2);
+  expect(toasts(store)).toEqual(['Dashboard updated']);
+  await advance(499);
+  expect(refresh).not.toHaveBeenCalled();
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(refresh.mock.calls[0][0]).toBe(ID);
+});
+
+test('hidden tab defers until visibilitychange', async () => {
+  setup();
+  setVisibility('hidden');
+  mockLive = 'v2';
+  changed('v2', 2);
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  await setVisibility('visible');
+  await advance(0);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('unapplied filter changes defer and are not lost', async () => {
+  const { store } = setup();
+  document.body.innerHTML =
+    '<button data-test="filter-bar__apply-button">Apply filters</button>';
+  mockLive = 'v2';
+  changed('v2', 2);
+  expect(toasts(store)).toEqual([
+    "Dashboard updated. It will refresh when you're done.",
+  ]);
+  await advance(30_000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  // the viewer applies (or clears) their selection: the button disables
+  document.querySelector('button')!.setAttribute('disabled', 'disabled');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('an open filter dropdown or drill menu defers the refresh', async () => {
+  setup();
+  document.body.innerHTML =
+    '<div class="ant-select-dropdown"></div><div class="ant-dropdown ant-dropdown-hidden"></div>';
+  mockLive = 'v2';
+  changed('v2', 2);
+  await advance(5000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  document.body.innerHTML = '<div class="ant-dropdown"></div>';
+  await advance(5000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  document.body.innerHTML =
+    '<div class="ant-select-dropdown ant-select-dropdown-hidden"></div>';
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('three events while hidden → one refresh to the newest', async () => {
+  const { store } = setup();
+  setVisibility('hidden');
+  mockLive = 'v4';
+  changed('v2', 2);
+  changed('v3', 3);
+  changed('v4', 4);
+  expect(toasts(store)).toHaveLength(1);
+  await advance(60_000);
+  send.mockClear();
+
+  await setVisibility('visible');
+  await advance(0);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect((store.getState() as any).dashboardInfo.versions).toEqual({
+    base: 'v4',
+    latest: 'v4',
+  });
+  // re-baselined once after the refresh
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledWith({ type: 'subscribe', dashboard: UUID });
+});
+
+test('out-of-order and duplicate events never move the tab backwards', async () => {
+  const { store } = setup();
+  setVisibility('hidden');
+  changed('v3', 3);
+  changed('v2', 2);
+  changed('v3', 3);
+  expect((store.getState() as any).dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v3',
+  });
+
+  mockLive = 'v3';
+  await setVisibility('visible');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  // the same events again, after the refresh: nothing
+  changed('v3', 3);
+  changed('v2', 2);
+  await advance(60_000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(toasts(store)).toHaveLength(1);
+});
+
+test('catch-up on reconnect when etag differs', async () => {
+  setup();
+  const subscribed = (etag: string, digest: string) =>
+    act(() =>
+      mockHandlers.subscribed({
+        dashboard: UUID,
+        ok: true,
+        etag,
+        charts_digest: digest,
+        why: null,
+      }),
+    );
+
+  // the first reply sets the digest baseline; same version: nothing to do
+  subscribed('"v1:acc"', 'x');
+  await advance(1000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  // a save landed while the socket was down
+  reconnect();
+  mockLive = 'v2';
+  subscribed('"v2:acc"', 'x');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  // the re-baseline reply after the refresh sets the new digest
+  subscribed('"v2:acc"', 'y');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  // a chart saved while down: same version, different digest
+  reconnect();
+  subscribed('"v2:acc"', 'z');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+test('an own save is held and then ignored: no notice, no refresh', async () => {
+  const { store } = setup();
+  let finish: (body: unknown) => void = () => {};
+  act(() => {
+    trackOwnWrite(
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+    ).then(body => store.dispatch(adoptOwnWrite(ID, body)));
+  });
+  // the event can beat the save's response
+  changed('v2', 2);
+  await act(async () => {
+    finish({ old_version_uuid: 'v1', new_version_uuid: 'v2' });
+  });
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(toasts(store)).toEqual([]);
+  expect((store.getState() as any).dashboardInfo.versions).toEqual({
+    base: 'v2',
+    latest: 'v2',
+  });
+});
+
+test('an event for another dashboard is ignored', async () => {
+  const { store } = setup();
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: 'other',
+      etag: 'v9',
+      version: 9,
+      reason: 'dashboard',
+      spread_ms: 0,
+    }),
+  );
+  await advance(1000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(toasts(store)).toEqual([]);
+});
+
+test('deleted marks the dashboard unavailable and cancels a pending refresh', async () => {
+  const { hook } = setup();
+  changed('v2', 2);
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      reason: 'deleted',
+      spread_ms: 0,
+    }),
+  );
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+  expect(hook.result.current.unavailable).toBe(true);
+});
+
+test('unmount cancels a pending refresh', async () => {
+  const { hook } = setup();
+  changed('v2', 2);
+  hook.unmount();
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+});

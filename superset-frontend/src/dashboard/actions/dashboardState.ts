@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a full save sends If-Match; a 412 opens the stale-save modal.
+ * Modified by ZetaIQ: writes count as own writes, so live events wait for them.
  */
 /* eslint camelcase: 0 */
 import { ActionCreators as UndoActionCreators } from 'redux-undo';
@@ -73,6 +74,7 @@ import {
   ifMatch,
   noteNewer,
   NO_VERSIONS,
+  trackOwnWrite,
   versionOf,
 } from 'src/dashboard/live/versionTracker';
 import {
@@ -264,16 +266,18 @@ export function savePublished(
     dispatch: AppDispatch,
     getState: GetState,
   ): Promise<void> {
-    return SupersetClient.put({
-      endpoint: `/api/v1/dashboard/${id}`,
-      // `*` matches any version, so the toggle is never refused, but makes
-      // the server lock the row before reading the version it replaces: no
-      // other save can land in between and be skipped by the adoption below
-      headers: { 'Content-Type': 'application/json', 'If-Match': '*' },
-      body: JSON.stringify({
-        published: isPublished,
+    return trackOwnWrite(
+      SupersetClient.put({
+        endpoint: `/api/v1/dashboard/${id}`,
+        // `*` matches any version, so the toggle is never refused, but makes
+        // the server lock the row before reading the version it replaces: no
+        // other save can land in between and be skipped by the adoption below
+        headers: { 'Content-Type': 'application/json', 'If-Match': '*' },
+        body: JSON.stringify({
+          published: isPublished,
+        }),
       }),
-    })
+    )
       .then(({ json }) => {
         // Only update state if this is still the current dashboard
         // This prevents stale responses from affecting the UI after navigation
@@ -720,14 +724,16 @@ export function saveDashboardRequest(
             dispatch(setDashboardVersions(id, noteNewer(known, etag)));
             sent = versionOf(etag);
           }
-          const response = await SupersetClient.put({
-            endpoint: `/api/v1/dashboard/${id}`,
-            headers: {
-              'Content-Type': 'application/json',
-              ...ifMatch(sent),
-            },
-            body: JSON.stringify(updatedDashboard),
-          });
+          const response = await trackOwnWrite(
+            SupersetClient.put({
+              endpoint: `/api/v1/dashboard/${id}`,
+              headers: {
+                'Content-Type': 'application/json',
+                ...ifMatch(sent),
+              },
+              body: JSON.stringify(updatedDashboard),
+            }),
+          );
           dispatch(adoptOwnWrite(id, response.json, sent));
           return await onUpdateSuccess(response);
         } catch (error) {
@@ -1356,7 +1362,7 @@ export const persistDashboardLabelsColor =
     if (labelsColorMapMustSync || sharedLabelsColorsMustSync) {
       dispatch(setDashboardLabelsColorMapSynced());
       dispatch(setDashboardSharedLabelsColorsSynced());
-      storeDashboardColorConfig(id, metadata)
+      trackOwnWrite(storeDashboardColorConfig(id, metadata))
         .then(({ json }) => dispatch(adoptOwnWrite(id, json)))
         // a background write: nothing for the person to act on
         .catch(error => logging.warn('Dashboard colour sync failed', error));
