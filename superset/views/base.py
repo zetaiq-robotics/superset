@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: WEBSOCKET_AUTH reaches the browser in the bootstrap conf.
 from __future__ import annotations
 
 import base64
@@ -99,6 +100,7 @@ FRONTEND_CONF_KEYS = (
     "WEBSOCKET_ENABLE",
     "WEBSOCKET_URL",
     "WEBSOCKET_JWT_EXPIRATION_SECONDS",
+    "WEBSOCKET_AUTH",
     "SQL_VALIDATORS_BY_ENGINE",
     "SQLALCHEMY_DOCS_URL",
     "SQLALCHEMY_DISPLAY_TEXT",

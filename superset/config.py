@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: WEBSOCKET_AUTH ("cookie" | "gateway") for the realtime socket.
 """The main config file for Superset
 
 All configuration in this file can be overridden by providing a superset_config
@@ -3028,6 +3029,11 @@ WEBSOCKET_JWT_COOKIE_SECURE = False
 WEBSOCKET_JWT_COOKIE_SAMESITE: None | (Literal["None", "Lax", "Strict"]) = None
 WEBSOCKET_JWT_COOKIE_DOMAIN = None
 WEBSOCKET_JWT_EXPIRATION_SECONDS = int(timedelta(minutes=15).total_seconds())
+# How the websocket server learns who is connecting: "cookie" (the JWT cookie
+# above, minted by this app) or "gateway" (an edge gateway in front of both this
+# app and the websocket server stamps the identity, so this app mints no cookie
+# and needs no WEBSOCKET_JWT_SECRET). Any other value refuses to start.
+WEBSOCKET_AUTH: Literal["cookie", "gateway"] = "cookie"
 
 # Prefix for the realtime pub/sub channel (default ""). Redis pub/sub is not
 # scoped by DB number, so deployments sharing one Redis/Valkey would cross-deliver

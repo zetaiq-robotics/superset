@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: WEBSOCKET_AUTH="gateway" (no cookie keepalive, sign-in
+ * check on refusal, spread-out reconnects) and sendRealtime.
  */
 
 /**
@@ -31,11 +34,14 @@
  * The transport is strictly best-effort: it is only an acceleration layer over
  * each feature's own authorized fetch/poll, so a socket outage costs latency,
  * not correctness. Connection auth is the `superset-ws-token` JWT cookie, which
- * rides the handshake automatically (same-host requirement).
+ * rides the handshake automatically (same-host requirement) — or, with
+ * `WEBSOCKET_AUTH: 'gateway'`, whatever identity the gateway in front of both
+ * services stamps on the handshake, so there is no cookie to keep alive.
  */
 import { SupersetClient } from '@superset-ui/core';
 import { logging } from '@apache-superset/core/utils';
 import getBootstrapData from 'src/utils/getBootstrapData';
+import { ensureAppRoot } from 'src/utils/navigationUtils';
 import { getTabId, subscribeTabIdChange } from 'src/hooks/useTabId';
 
 /** The generic envelope the server forwards to the browser. */
@@ -51,6 +57,7 @@ type RealtimeConfig = {
   WEBSOCKET_ENABLE?: boolean;
   WEBSOCKET_URL?: string;
   WEBSOCKET_JWT_EXPIRATION_SECONDS?: number;
+  WEBSOCKET_AUTH?: string;
 };
 
 // Reconnect backoff after the socket closes. The socket is a first-class
@@ -75,7 +82,7 @@ const WS_OPEN = 1;
 const KEEPALIVE_FRACTION = 0.6;
 // An authed, same-origin GET whose response passes through the Flask
 // `after_request` hook that (re)mints the ws cookie. Any authed endpoint works;
-// `me` is the cheapest stable one.
+// `me` is the cheapest stable one. Gateway mode uses it as the sign-in check.
 const COOKIE_REFRESH_ENDPOINT = '/api/v1/me/';
 
 let socket: WebSocket | undefined;
@@ -84,6 +91,8 @@ let keepaliveTimeoutId: number;
 // Token lifetime (ms) from bootstrap config; 0 disables the proactive keepalive.
 let tokenLifetimeMs = 0;
 let enabled = false;
+// WEBSOCKET_AUTH === 'gateway': see checkSignedIn and scheduleReconnect.
+let gatewayAuth = false;
 let url: string | undefined;
 let started = false;
 // Bumped on every (re)configuration so an in-flight reconnect scheduled against
@@ -158,21 +167,63 @@ const reconnectDelayMs = (attempts: number): number => {
   return base + Math.random() * Math.min(base, RECONNECT_BASE_MS);
 };
 
+// Gateway mode: before retrying a refused (4401) socket, and on every 3rd failed
+// connect of a streak, ask whether the person is still signed in. At most one
+// check is in flight: no reconnect is scheduled until it answers. `window.fetch`
+// is looked up at call time so the host page's wrapper runs (it tells the host
+// about a 401). A 401 stops reconnecting for good; any other answer keeps the
+// backoff going.
+const checkSignedIn = (thisGeneration: number, reconnect: () => void): void => {
+  window
+    .fetch(ensureAppRoot(COOKIE_REFRESH_ENDPOINT))
+    .then(
+      response => response.status === 401,
+      () => false,
+    )
+    .then(signedOut => {
+      if (thisGeneration !== generation) return;
+      if (signedOut) emitState('unhealthy');
+      else reconnect();
+    });
+};
+
 // Record a close/connect failure: bump the attempt counter, report `reconnecting`
 // (or `unhealthy` once the socket has failed enough times), and schedule the next
 // reconnect with backoff.
-const scheduleReconnect = (thisGeneration: number): void => {
+const scheduleReconnect = (
+  thisGeneration: number,
+  closeCode?: number,
+): void => {
   reconnectAttempts += 1;
   emitState(
     reconnectAttempts >= UNHEALTHY_AFTER_ATTEMPTS
       ? 'unhealthy'
       : 'reconnecting',
   );
-  reconnectTimeoutId = window.setTimeout(
-    // eslint-disable-next-line no-use-before-define -- mutual reconnect recursion
-    () => openSocket(thisGeneration, 'reconnect'),
-    reconnectDelayMs(reconnectAttempts),
-  );
+  // Gateway mode: a restart (1012) or a gateway going away (1006) drops many
+  // sockets at once, so spread their return evenly over 0–30 s. The browser
+  // also reports any refused or failed upgrade (503, gateway down) as 1006, so
+  // in practice the spread is the default for failed connects; normal backoff
+  // applies after 4401, 1013 and clean closes. Intended (spec §7.6).
+  const delay =
+    gatewayAuth && (closeCode === 1012 || closeCode === 1006)
+      ? Math.random() * RECONNECT_MAX_MS
+      : reconnectDelayMs(reconnectAttempts);
+  const reconnect = () => {
+    reconnectTimeoutId = window.setTimeout(
+      // eslint-disable-next-line no-use-before-define -- mutual reconnect recursion
+      () => openSocket(thisGeneration, 'reconnect'),
+      delay,
+    );
+  };
+  if (
+    gatewayAuth &&
+    (closeCode === 4401 || reconnectAttempts % UNHEALTHY_AFTER_ATTEMPTS === 0)
+  ) {
+    checkSignedIn(thisGeneration, reconnect);
+  } else {
+    reconnect();
+  }
 };
 
 /**
@@ -346,9 +397,9 @@ function openSocket(thisGeneration: number, reason: RealtimeOpenReason): void {
     if (thisGeneration === generation)
       dispatchRealtimeMessage(String(event.data));
   };
-  ws.onclose = () => {
+  ws.onclose = (event: CloseEvent) => {
     if (thisGeneration !== generation) return;
-    scheduleReconnect(thisGeneration);
+    scheduleReconnect(thisGeneration, event?.code);
   };
   // Errors surface as a subsequent close; let onclose own the reconnect and
   // avoid logging the (payload-free) error event on every transient blip.
@@ -383,8 +434,27 @@ export const connectRealtime = (config?: RealtimeConfig): void => {
   started = true;
   enabled = nextEnabled;
   url = nextUrl;
-  tokenLifetimeMs = (conf?.WEBSOCKET_JWT_EXPIRATION_SECONDS ?? 0) * 1000;
+  gatewayAuth = conf?.WEBSOCKET_AUTH === 'gateway';
+  // Gateway mode has no cookie to refresh, so no keepalive.
+  tokenLifetimeMs = gatewayAuth
+    ? 0
+    : (conf?.WEBSOCKET_JWT_EXPIRATION_SECONDS ?? 0) * 1000;
   openSocket(generation, 'initial');
+};
+
+/**
+ * Send `message` as JSON on the open socket. Returns false, sending nothing,
+ * when the socket is not open (callers retry on the next `reconnect` open).
+ */
+export const sendRealtime = (message: object): boolean => {
+  if (socket?.readyState !== WS_OPEN) return false;
+  try {
+    socket.send(JSON.stringify(message));
+    return true;
+  } catch (err) {
+    logging.warn('Failed to send realtime message', err);
+    return false;
+  }
 };
 
 /** Tear down the socket and stop reconnecting. */

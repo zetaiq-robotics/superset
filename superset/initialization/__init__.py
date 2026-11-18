@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: WEBSOCKET_AUTH="gateway" skips the ws cookie and its secret check.
 from __future__ import annotations
 
 import contextlib
@@ -1129,7 +1130,16 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
 
     def check_websocket_secret(self) -> None:
         """Refuse to start with a default/weak websocket JWT secret when enabled."""
-        if not self.config.get("WEBSOCKET_ENABLE"):
+        auth = self.config.get("WEBSOCKET_AUTH", "cookie")
+        if auth not in ("cookie", "gateway"):
+            logger.error(
+                "Refusing to start: WEBSOCKET_AUTH must be 'cookie' or 'gateway', "
+                "got %r",
+                auth,
+            )
+            sys.exit(1)
+        # Gateway mode mints no channel token, so there is no secret to check.
+        if not self.config.get("WEBSOCKET_ENABLE") or auth == "gateway":
             return
         secret = self.config.get("WEBSOCKET_JWT_SECRET") or ""
         if secret != CHANGE_ME_WEBSOCKET_JWT_SECRET and len(secret) >= 32:
@@ -1631,7 +1641,11 @@ class SupersetAppInitializer:  # pylint: disable=too-many-public-methods
 
     def configure_websocket(self) -> None:
         """Mint the websocket channel-token cookie when the transport is enabled."""
-        if self.config.get("WEBSOCKET_ENABLE"):
+        # Gateway mode: the edge gateway carries the identity; no cookie to mint.
+        if (
+            self.config.get("WEBSOCKET_ENABLE")
+            and self.config.get("WEBSOCKET_AUTH") != "gateway"
+        ):
             from superset.websocket.channel import register_ws_channel_cookie
 
             register_ws_channel_cookie(self.superset_app)

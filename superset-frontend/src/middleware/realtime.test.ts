@@ -15,12 +15,15 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: gateway sign-in mode (WEBSOCKET_AUTH) and sendRealtime.
  */
 import { SupersetClient } from '@superset-ui/core';
 import {
   connectRealtime,
   dispatchRealtimeMessage,
   resetRealtimeForTests,
+  sendRealtime,
   subscribeRealtime,
   subscribeRealtimeOpen,
   subscribeRealtimeState,
@@ -64,9 +67,11 @@ class FakeWebSocket {
 
   onmessage: ((event: { data: string }) => void) | null = null;
 
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number }) => void) | null = null;
 
   onerror: (() => void) | null = null;
+
+  send = jest.fn();
 
   close = jest.fn(() => {
     this.readyState = 3;
@@ -387,4 +392,234 @@ test('does not schedule a keepalive without a configured token lifetime', () => 
     getSpy.mockRestore();
     jest.useRealTimers();
   }
+});
+
+// --- Gateway sign-in mode (WEBSOCKET_AUTH = "gateway") ---------------------
+
+const GATEWAY = { ...ENABLED, WEBSOCKET_AUTH: 'gateway' };
+
+const lastSocket = () =>
+  FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+
+// Let a fetch(...).then(...) chain settle while fake timers are on.
+const flushPromises = async () => {
+  for (let i = 0; i < 5; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+};
+
+describe('gateway mode', () => {
+  const originalFetch = window.fetch;
+  let fetchMock: jest.Mock;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    fetchMock = jest.fn().mockResolvedValue({ status: 200 });
+    // Assigned after the module loaded: the client must look fetch up at call
+    // time so the platform's window.fetch wrapper is the one that runs.
+    window.fetch = fetchMock as unknown as typeof window.fetch;
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+    window.fetch = originalFetch;
+  });
+
+  test('realtime: no keepalive request in gateway mode', () => {
+    const getSpy = jest.spyOn(SupersetClient, 'get');
+    connectRealtime({ ...GATEWAY, WEBSOCKET_JWT_EXPIRATION_SECONDS: 900 });
+    FakeWebSocket.instances[0].readyState = 1;
+    FakeWebSocket.instances[0].onopen?.();
+
+    jest.advanceTimersByTime(60 * 60 * 1000);
+
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('4401 then 401 stops reconnecting (one /api/v1/me/ call, no postMessage)', async () => {
+    fetchMock.mockResolvedValue({ status: 401 });
+    const postSpy = jest.spyOn(window, 'postMessage');
+    const states: string[] = [];
+    subscribeRealtimeState(s => states.push(s));
+    connectRealtime(GATEWAY);
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/me/');
+    expect(states[states.length - 1]).toBe('unhealthy');
+    expect(jest.getTimerCount()).toBe(0);
+    jest.advanceTimersByTime(10 * 60 * 1000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['200', () => Promise.resolve({ status: 200 })],
+    ['503', () => Promise.resolve({ status: 503 })],
+    ['a network error', () => Promise.reject(new Error('offline'))],
+  ])('4401 then %s reconnects', async (_label, answer) => {
+    fetchMock.mockImplementation(answer);
+    connectRealtime(GATEWAY);
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await flushPromises();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(30_000);
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  test.each([1012, 1006])('%i reconnect delay within 0–30 s', code => {
+    // Mid-range draw: 15 s, far from the normal backoff's first step (1–2 s).
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    connectRealtime(GATEWAY);
+    FakeWebSocket.instances[0].onclose?.({ code });
+    jest.advanceTimersByTime(14_999);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    jest.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    // Top of the range still lands inside 30 s.
+    (Math.random as jest.Mock).mockReturnValue(0.9999);
+    lastSocket().onclose?.({ code });
+    jest.advanceTimersByTime(30_000);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('1013 uses normal backoff', () => {
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+    connectRealtime(GATEWAY);
+    FakeWebSocket.instances[0].onclose?.({ code: 1013 });
+    // First backoff step: 1000 ms + 0.5 * 1000 ms of jitter.
+    jest.advanceTimersByTime(1499);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    jest.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  test('three failed connects trigger one /me check', async () => {
+    connectRealtime(GATEWAY);
+    for (let i = 0; i < 2; i += 1) {
+      lastSocket().onclose?.({ code: 1013 });
+      jest.advanceTimersByTime(30_000);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    lastSocket().onclose?.({ code: 1013 });
+    await flushPromises();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(30_000);
+    expect(FakeWebSocket.instances).toHaveLength(4);
+
+    // A fourth failure in the same streak does not ask again.
+    lastSocket().onclose?.({ code: 1013 });
+    await flushPromises();
+    jest.advanceTimersByTime(30_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(5);
+  });
+
+  test('reports a reconnect open after every re-open', () => {
+    const reasons: string[] = [];
+    const states: string[] = [];
+    subscribeRealtimeOpen(reason => reasons.push(reason));
+    subscribeRealtimeState(s => states.push(s));
+    connectRealtime(GATEWAY);
+    FakeWebSocket.instances[0].onopen?.();
+
+    for (let i = 0; i < 2; i += 1) {
+      lastSocket().onclose?.({ code: 1006 });
+      jest.advanceTimersByTime(30_000);
+      lastSocket().onopen?.();
+      expect(states[states.length - 1]).toBe('open');
+    }
+
+    expect(reasons).toEqual(['initial', 'reconnect', 'reconnect']);
+  });
+
+  test('cookie mode unchanged (keepalive still runs, 4401 not special)', async () => {
+    const getSpy = jest
+      .spyOn(SupersetClient, 'get')
+      .mockResolvedValue({} as never);
+    connectRealtime({ ...ENABLED, WEBSOCKET_JWT_EXPIRATION_SECONDS: 900 });
+
+    FakeWebSocket.instances[0].onclose?.({ code: 4401 });
+    await flushPromises();
+    expect(fetchMock).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    FakeWebSocket.instances[1].readyState = 1;
+    jest.advanceTimersByTime(540_000);
+    expect(getSpy).toHaveBeenCalledWith({ endpoint: '/api/v1/me/' });
+  });
+
+  test.each([1006, 1012])(
+    'cookie mode unchanged: %i uses normal backoff, not the 0–30 s spread',
+    code => {
+      jest.spyOn(Math, 'random').mockReturnValue(0.5);
+      connectRealtime(ENABLED);
+      FakeWebSocket.instances[0].onclose?.({ code });
+      // First backoff step: 1000 ms + 0.5 * 1000 ms (the spread would be 15 s).
+      jest.advanceTimersByTime(1499);
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      jest.advanceTimersByTime(1);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    },
+  );
+
+  test('every 3rd failed connect checks /me: network error keeps going, 401 stops', async () => {
+    // A laptop asleep past expiry sees 1006, never 4401: a failed check must
+    // not be the last one, or the tab retries forever.
+    fetchMock
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ status: 401 });
+    const states: string[] = [];
+    subscribeRealtimeState(s => states.push(s));
+    connectRealtime(GATEWAY);
+
+    const failThreeTimes = async () => {
+      for (let i = 0; i < 3; i += 1) {
+        lastSocket().onclose?.({ code: 1006 });
+        // eslint-disable-next-line no-await-in-loop
+        await flushPromises();
+        jest.advanceTimersByTime(30_000);
+      }
+    };
+
+    await failThreeTimes();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(4); // kept reconnecting
+
+    await failThreeTimes();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(FakeWebSocket.instances).toHaveLength(6); // no reconnect after 401
+    expect(states[states.length - 1]).toBe('unhealthy');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+test('sendRealtime sends JSON only on an open socket', () => {
+  expect(sendRealtime({ type: 'x' })).toBe(false); // no socket
+
+  connectRealtime(ENABLED);
+  const [ws] = FakeWebSocket.instances;
+  expect(sendRealtime({ type: 'x' })).toBe(false); // still connecting
+  expect(ws.send).not.toHaveBeenCalled();
+
+  ws.readyState = 1;
+  expect(sendRealtime({ type: 'subscribe', id: 7 })).toBe(true);
+  expect(ws.send).toHaveBeenCalledWith('{"type":"subscribe","id":7}');
+
+  ws.readyState = 3;
+  expect(sendRealtime({ type: 'x' })).toBe(false);
+  expect(ws.send).toHaveBeenCalledTimes(1);
 });
