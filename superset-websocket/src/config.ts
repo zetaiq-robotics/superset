@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: introspection settings, the dashboard access check and live-dashboard limits replace the JWT settings.
+// Modified by ZetaIQ: introspection settings, the dashboard access check and live-dashboard limits replace the JWT settings;
+// the realtime channel prefix is removed (tenant channels are fixed).
 
 import { readFileSync } from 'fs';
 import { merge as _merge } from 'lodash-es';
@@ -73,7 +74,6 @@ type ConfigType = {
   accessCheckUrl: string;
   maxSubscriptionsPerSocket: number;
   maxSocketsPerPerson: number;
-  realtimeChannelPrefix: string;
   allowedOrigins: string[];
   socketResponseTimeoutMs: number;
   pingSocketsIntervalMs: number;
@@ -93,7 +93,6 @@ function defaultConfig(): ConfigType {
     introspectIntervalMs: 60 * 1000,
     accessCheckUrl: '',
     maxSubscriptionsPerSocket: 4,
-    realtimeChannelPrefix: '',
     allowedOrigins: [],
     socketResponseTimeoutMs: 60 * 1000,
     pingSocketsIntervalMs: 20 * 1000,
@@ -230,7 +229,6 @@ function applyEnvOverrides(config: ConfigType): ConfigType {
         val,
         config.maxSocketsPerPerson,
       )),
-    REALTIME_CHANNEL_PREFIX: val => (config.realtimeChannelPrefix = val),
     ALLOWED_ORIGINS: val => (config.allowedOrigins = toStringArray(val)),
     SOCKET_RESPONSE_TIMEOUT_MS: val =>
       (config.socketResponseTimeoutMs = toNonNegativeNumber(

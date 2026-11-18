@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: identity tests use the gateway's introspected token instead of the JWT cookie.
+// Modified by ZetaIQ: identity tests use the gateway's introspected token instead of the JWT cookie;
+// pattern subscription to tenant channels and tenant-scoped routing.
 
 import {
   describe,
@@ -39,15 +40,15 @@ import type { RedisConfig } from '../src/config';
 import type { GatewayIdentity } from '../src/gatewayAuth';
 import { statsd } from '../src/index';
 
-const { mockSubscribe, mockOn } = vi.hoisted(() => {
-  return { mockSubscribe: vi.fn(), mockOn: vi.fn() };
+const { mockPsubscribe, mockOn } = vi.hoisted(() => {
+  return { mockPsubscribe: vi.fn(), mockOn: vi.fn() };
 });
 
 vi.mock('ws');
 vi.mock('ioredis', () => {
   return {
     Redis: vi.fn().mockImplementation(function () {
-      return { subscribe: mockSubscribe, on: mockOn };
+      return { psubscribe: mockPsubscribe, on: mockOn };
     }),
   };
 });
@@ -374,55 +375,37 @@ describe('server', () => {
 
   describe('subscribeToChannels', () => {
     const messageHandlers = () =>
-      mockOn.mock.calls.filter(([event]) => event === 'message');
+      mockOn.mock.calls.filter(([event]) => event === 'pmessage');
 
     beforeEach(() => {
-      mockSubscribe.mockReset();
+      mockPsubscribe.mockReset();
       mockOn.mockClear();
     });
 
-    test('subscribes to the single realtime channel', async () => {
-      mockSubscribe.mockResolvedValue(1);
+    test('subscribes by pattern to every tenant channel', async () => {
+      mockPsubscribe.mockResolvedValue(1);
 
       await server.subscribeToChannels();
 
-      expect(mockSubscribe).toHaveBeenCalledTimes(1);
-      expect(mockSubscribe).toHaveBeenCalledWith('realtime');
+      expect(mockPsubscribe).toHaveBeenCalledTimes(1);
+      expect(mockPsubscribe).toHaveBeenCalledWith('t:*:realtime');
       expect(messageHandlers()).toHaveLength(1);
-    });
-
-    test('subscribes to the prefixed channel when REALTIME_CHANNEL_PREFIX is set', async () => {
-      mockSubscribe.mockResolvedValue(1);
-      process.env.REALTIME_CHANNEL_PREFIX = 'tenant-a:';
-      vi.resetModules();
-      try {
-        // Re-import so the module re-reads config: REALTIME_CHANNEL is derived
-        // from opts at load time, so the prefix must flow env -> config -> the
-        // subscribed channel name.
-        const freshServer = await import('../src/index');
-        await freshServer.subscribeToChannels();
-
-        expect(mockSubscribe).toHaveBeenCalledWith('tenant-a:realtime');
-      } finally {
-        delete process.env.REALTIME_CHANNEL_PREFIX;
-        vi.resetModules();
-      }
     });
 
     test('retries a rejected subscription without stacking a second router', async () => {
       vi.useFakeTimers();
       try {
-        mockSubscribe
+        mockPsubscribe
           .mockRejectedValueOnce(new Error('redis unreachable'))
           .mockResolvedValueOnce(1);
 
         await server.subscribeToChannels();
-        expect(mockSubscribe).toHaveBeenCalledTimes(1);
+        expect(mockPsubscribe).toHaveBeenCalledTimes(1);
 
         await vi.advanceTimersByTimeAsync(5000);
 
-        expect(mockSubscribe).toHaveBeenCalledTimes(2);
-        // A retry must leave exactly one `message` listener: a second one
+        expect(mockPsubscribe).toHaveBeenCalledTimes(2);
+        // A retry must leave exactly one `pmessage` listener: a second one
         // would route every message twice.
         expect(messageHandlers()).toHaveLength(1);
       } finally {
@@ -430,8 +413,8 @@ describe('server', () => {
       }
     });
 
-    test('the registered message handler routes to the matching socket', async () => {
-      mockSubscribe.mockResolvedValue(1);
+    test('the registered pmessage handler routes to the matching socket', async () => {
+      mockPsubscribe.mockResolvedValue(1);
       await server.subscribeToChannels();
 
       const ws = new wsMock('localhost');
@@ -440,27 +423,58 @@ describe('server', () => {
 
       const [, handler] = messageHandlers()[0] as [
         string,
-        (channel: string, message: string) => void,
+        (pattern: string, channel: string, message: string) => void,
       ];
       handler(
-        'realtime',
+        't:*:realtime',
+        't:acme:realtime',
         JSON.stringify({
-          topic: 'entity.changed',
-          scope: 'authenticated_global',
-          payload: { entity_type: 'task', id: 'abc' },
+          topic: 'task.status',
+          scope: 'principal',
+          routes: [channelId],
+          payload: { task_id: 'abc' },
         }),
       );
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledWith(
+          JSON.stringify({ topic: 'task.status', payload: { task_id: 'abc' } }),
+        ),
+      );
+    });
 
-      expect(send).toHaveBeenCalledWith(
-        JSON.stringify({
-          topic: 'entity.changed',
-          payload: { entity_type: 'task', id: 'abc' },
-        }),
-      );
+    test('Redis loss still closes every socket 1012', async () => {
+      // The connection handlers are bound at module load; load a fresh copy
+      // to capture them.
+      mockOn.mockClear();
+      vi.resetModules();
+      try {
+        const fresh = await import('../src/index');
+        fresh.resetState();
+        const ws = new wsMock('localhost');
+        const closeSpy = vi.spyOn(ws, 'close');
+        fresh.trackClient(channelId, {
+          ws,
+          channel: channelId,
+          identity: makeIdentity(channelId),
+          pongTs: Date.now(),
+        });
+        const closeHandlers = mockOn.mock.calls.filter(
+          ([event]) => event === 'close',
+        );
+        // Only the subscriber connection reacts; the counts one never closes sockets.
+        expect(closeHandlers).toHaveLength(1);
+        (closeHandlers[0][1] as () => void)();
+
+        expect(fresh.subscriberHealthy).toBe(false);
+        expect(closeSpy).toHaveBeenCalledWith(1012, expect.any(String));
+      } finally {
+        vi.resetModules();
+      }
     });
   });
 
   describe('routeRedisMessage', () => {
+    const CHANNEL = 't:acme:realtime';
     const taskStatus = (routes: string[], scope = 'tab') =>
       JSON.stringify({
         topic: 'task.status',
@@ -469,18 +483,19 @@ describe('server', () => {
         payload: { task_id: 'abc', status: 'success' },
       });
 
-    test('fans a task-status message out to the named routes only', () => {
-      // Two principals connected; a task-status message targeting user:5 reaches
-      // only user:5 and is forwarded as a per-principal browser message.
+    test('fans a task-status message out to the named routes only', async () => {
       const wsA = new wsMock('localhost');
       const sendA = vi.spyOn(wsA, 'send');
-      trackSocket('user:5', wsA);
+      trackSocket('t:acme:p:5', wsA);
 
       const wsB = new wsMock('localhost');
       const sendB = vi.spyOn(wsB, 'send');
-      trackSocket('user:9', wsB);
+      trackSocket('t:acme:p:9', wsB);
 
-      server.routeRedisMessage('realtime', taskStatus(['user:5'], 'principal'));
+      await server.routeRedisMessage(
+        CHANNEL,
+        taskStatus(['t:acme:p:5'], 'principal'),
+      );
 
       expect(sendA).toHaveBeenCalledTimes(1);
       expect(sendA).toHaveBeenCalledWith(
@@ -492,105 +507,51 @@ describe('server', () => {
       expect(sendB).not.toHaveBeenCalled();
     });
 
-    test('fans a task-status message out to a guest channel', () => {
-      const ws = new wsMock('localhost');
-      const send = vi.spyOn(ws, 'send');
-      trackSocket('guest:abc', ws);
-
-      server.routeRedisMessage(
-        'realtime',
-        JSON.stringify({
-          topic: 'task.status',
-          scope: 'principal',
-          routes: ['guest:abc'],
-          payload: { task_id: 'xyz', status: 'failure' },
-        }),
-      );
-
-      expect(send).toHaveBeenCalledWith(
-        JSON.stringify({
-          topic: 'task.status',
-          payload: { task_id: 'xyz', status: 'failure' },
-        }),
-      );
-    });
-
-    test('fans a per-tab task-status message out to only that tab', () => {
-      // Two tabs of one principal, each dual-registered on user:5 and its own
-      // per-tab channel. A message targeting user:5:tabA reaches only tab A.
+    test('fans a per-tab task-status message out to only that tab', async () => {
       const wsA = new wsMock('localhost');
       const sendA = vi.spyOn(wsA, 'send');
-      server.wsConnection(wsA, makeIdentity('user:5'), 'tabA');
+      server.wsConnection(wsA, makeIdentity('t:acme:p:5'), 'tabA');
 
       const wsB = new wsMock('localhost');
       const sendB = vi.spyOn(wsB, 'send');
-      server.wsConnection(wsB, makeIdentity('user:5'), 'tabB');
+      server.wsConnection(wsB, makeIdentity('t:acme:p:5'), 'tabB');
 
-      server.routeRedisMessage('realtime', taskStatus(['user:5:tabA']));
+      await server.routeRedisMessage(CHANNEL, taskStatus(['t:acme:p:5:tabA']));
 
       expect(sendA).toHaveBeenCalledTimes(1);
-      expect(sendA).toHaveBeenCalledWith(
-        JSON.stringify({
-          topic: 'task.status',
-          payload: { task_id: 'abc', status: 'success' },
-        }),
-      );
       expect(sendB).not.toHaveBeenCalled();
     });
 
-    test('drops an envelope with an empty-string routing key', () => {
+    test('drops an envelope with an empty-string routing key', async () => {
       const ws = new wsMock('localhost');
       const send = vi.spyOn(ws, 'send');
-      trackSocket('user:5', ws);
+      trackSocket('t:acme:p:5', ws);
 
-      server.routeRedisMessage('realtime', taskStatus(['']));
+      await server.routeRedisMessage(CHANNEL, taskStatus(['']));
 
       expect(send).not.toHaveBeenCalled();
     });
 
-    test('deduplicates repeated routing keys within a targeted message', () => {
+    test('deduplicates repeated routing keys within a targeted message', async () => {
       const ws = new wsMock('localhost');
       const send = vi.spyOn(ws, 'send');
-      trackSocket('user:5', ws);
+      trackSocket('t:acme:p:5', ws);
 
-      server.routeRedisMessage('realtime', taskStatus(['user:5', 'user:5']));
+      await server.routeRedisMessage(
+        CHANNEL,
+        taskStatus(['t:acme:p:5', 't:acme:p:5']),
+      );
 
       expect(send).toHaveBeenCalledTimes(1);
     });
 
-    test('broadcasts an entity-change nudge to every socket', () => {
-      const wsA = new wsMock('localhost');
-      const sendA = vi.spyOn(wsA, 'send');
-      trackSocket('user:5', wsA);
-
-      const wsB = new wsMock('localhost');
-      const sendB = vi.spyOn(wsB, 'send');
-      trackSocket('guest:abc', wsB);
-
-      const payload = { entity_type: 'task', id: 'abc' };
-      server.routeRedisMessage(
-        'realtime',
-        JSON.stringify({
-          topic: 'entity.changed',
-          scope: 'authenticated_global',
-          payload,
-        }),
-      );
-
-      const expected = JSON.stringify({ topic: 'entity.changed', payload });
-      expect(sendA).toHaveBeenCalledWith(expected);
-      expect(sendB).toHaveBeenCalledWith(expected);
-    });
-
-    test('broadcasts once to a dual-registered (per-tab) socket', () => {
-      // A socket registered under both its principal and per-tab channel must
-      // receive a broadcast exactly once (dedup by socket, not by channel).
+    test('drops the upstream broadcast scope', async () => {
       const ws = new wsMock('localhost');
       const send = vi.spyOn(ws, 'send');
-      server.wsConnection(ws, makeIdentity('user:5'), 'tabA');
+      trackSocket('t:acme:p:5', ws);
 
-      server.routeRedisMessage(
-        'realtime',
+      await server.routeRedisMessage(
+        CHANNEL,
         JSON.stringify({
           topic: 'entity.changed',
           scope: 'authenticated_global',
@@ -598,41 +559,69 @@ describe('server', () => {
         }),
       );
 
-      expect(send).toHaveBeenCalledTimes(1);
-    });
-
-    test('swallows a malformed (non-JSON) message', () => {
-      const ws = new wsMock('localhost');
-      const send = vi.spyOn(ws, 'send');
-      trackSocket(channelId, ws);
-
-      // Must not throw; simply drops the unparseable message.
-      expect(() =>
-        server.routeRedisMessage('realtime', 'not json'),
-      ).not.toThrow();
       expect(send).not.toHaveBeenCalled();
     });
 
-    test('drops a malformed envelope (missing topic)', () => {
+    test('drops every envelope on a non-tenant channel', async () => {
       const ws = new wsMock('localhost');
       const send = vi.spyOn(ws, 'send');
-      trackSocket(channelId, ws);
+      trackSocket('t:acme:p:5', ws);
 
-      server.routeRedisMessage(
+      await server.routeRedisMessage(
         'realtime',
-        JSON.stringify({ scope: 'authenticated_global', payload: { id: 1 } }),
+        taskStatus(['t:acme:p:5'], 'principal'),
       );
 
       expect(send).not.toHaveBeenCalled();
     });
 
-    test('a targeted envelope with no routes delivers nowhere', () => {
+    test('drops a cross-tenant route and counts it', async () => {
       const ws = new wsMock('localhost');
       const send = vi.spyOn(ws, 'send');
-      trackSocket('user:5', ws);
+      trackSocket('t:globex:p:5', ws);
 
-      server.routeRedisMessage(
-        'realtime',
+      await server.routeRedisMessage(
+        CHANNEL,
+        taskStatus(['t:globex:p:5'], 'principal'),
+      );
+
+      expect(send).not.toHaveBeenCalled();
+      expect(statsdIncrementMock).toHaveBeenCalledWith(
+        'ws_cross_tenant_route_dropped',
+      );
+    });
+
+    test('swallows a malformed (non-JSON) message', async () => {
+      const ws = new wsMock('localhost');
+      const send = vi.spyOn(ws, 'send');
+      trackSocket(channelId, ws);
+
+      await expect(
+        server.routeRedisMessage(CHANNEL, 'not json'),
+      ).resolves.toBeUndefined();
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    test('drops a malformed envelope (missing topic)', async () => {
+      const ws = new wsMock('localhost');
+      const send = vi.spyOn(ws, 'send');
+      trackSocket(channelId, ws);
+
+      await server.routeRedisMessage(
+        CHANNEL,
+        JSON.stringify({ scope: 'principal', routes: [channelId] }),
+      );
+
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    test('a targeted envelope with no routes delivers nowhere', async () => {
+      const ws = new wsMock('localhost');
+      const send = vi.spyOn(ws, 'send');
+      trackSocket(channelId, ws);
+
+      await server.routeRedisMessage(
+        CHANNEL,
         JSON.stringify({
           topic: 'task.status',
           scope: 'principal',

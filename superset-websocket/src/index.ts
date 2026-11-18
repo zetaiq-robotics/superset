@@ -17,7 +17,8 @@
  * under the License.
  */
 // Modified by ZetaIQ: identity from the gateway's delegated token (introspection) replaces the JWT cookie; per-person cap, SIGTERM close;
-// per-dashboard subscribe/unsubscribe frames (1 KB frame cap).
+// per-dashboard subscribe/unsubscribe frames (1 KB frame cap); tenant channels by pattern (`t:*:realtime`) with
+// cross-tenant routes dropped, per-dashboard delivery and audience-sized spread from viewer counts shared in Redis.
 import * as http from 'http';
 import * as net from 'net';
 import { readFileSync } from 'fs';
@@ -37,7 +38,13 @@ import {
   identityFromRequest,
   watchIdentity,
 } from './gatewayAuth.js';
-import { watchSubscriptions } from './subscriptions.js';
+import {
+  onCountChange,
+  subscribersOf,
+  watchSubscriptions,
+} from './subscriptions.js';
+import { routeEnvelope } from './tenantRouting.js';
+import { createViewerCounts, replicaId } from './viewerCounts.js';
 import {
   checkServerIdentity,
   ConnectionOptions,
@@ -67,7 +74,7 @@ export interface OutboundMessage {
  * `routes`), `routes` are the server-side routing keys (present for a targeted
  * scope, absent/ignored for a broadcast), and `payload` is forwarded verbatim.
  */
-interface RealtimeEnvelope {
+export interface RealtimeEnvelope {
   topic: string;
   scope: string;
   routes?: string[];
@@ -206,6 +213,16 @@ const redisSubscriber = new Redis(buildRedisOpts(opts.redis));
 redisSubscriber.on('error', (err: Error) => {
   logger.error(`Redis connection error: ${err.message}`);
 });
+// Viewer counts need ordinary commands, so a second connection. Its loss
+// never closes sockets: counts only size the refresh spread.
+const redisCounts = new Redis(buildRedisOpts(opts.redis));
+redisCounts.on('error', (err: Error) => {
+  logger.error(`Redis (viewer counts) connection error: ${err.message}`);
+});
+export const viewerCounts = createViewerCounts(redisCounts, replicaId(), {
+  logger,
+  statsd,
+});
 const httpServer = http.createServer();
 export const wss = new WebSocketServer({
   noServer: true,
@@ -216,19 +233,10 @@ export const wss = new WebSocketServer({
 
 const SOCKET_ACTIVE_STATES: number[] = [WebSocket.OPEN, WebSocket.CONNECTING];
 
-// The single Pub/Sub channel the server tails. This is a wire-protocol contract
-// with the Superset producer (superset/tasks/manager.py). The name is
-// `${prefix}realtime`, where the prefix comes from REALTIME_CHANNEL_PREFIX (empty
-// by default). Redis Pub/Sub is not scoped by DB number, so deployments sharing
-// one Redis/Valkey set a per-deployment prefix to isolate their channels — it MUST
-// be set identically here and on the producer (Flask REALTIME_CHANNEL_PREFIX),
-// since a mismatch would subscribe to a channel nothing publishes to.
-const REALTIME_CHANNEL = `${opts.realtimeChannelPrefix}realtime`;
-
-// Envelope scopes (delivery breadth), mirrored from the producer. A message is
-// broadcast to every authenticated socket when its scope is `authenticated_global`,
-// and otherwise targeted to the routing keys it names.
-const SCOPE_AUTHENTICATED_GLOBAL = 'authenticated_global';
+// The server tails every tenant's channel, `t:<tenant>:realtime`, by pattern.
+// Upstream's own channel (`<REALTIME_CHANNEL_PREFIX>realtime`) is not
+// subscribed, so its topics stay off; tenantRouting validates each channel.
+const REALTIME_PATTERN = 't:*:realtime';
 
 // Bound on a client-supplied tab id before it is concatenated into a channel key
 // (`<channel>:<tabId>`). The principal prefix is server-derived, but the tab
@@ -300,6 +308,7 @@ export const shutdown = (): void => {
   shuttingDown = true;
   logger.info('SIGTERM: closing every socket with 1012');
   httpServer.close();
+  viewerCounts.stop();
   closeAllSockets(SUBSCRIBER_UNHEALTHY_CLOSE_CODE, 'server restart');
   setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS);
 };
@@ -473,21 +482,6 @@ export const sendToChannel = (
 };
 
 /**
- * Sends a message to every connected socket, regardless of channel. Used for the
- * `authenticated_global` broadcast scope (e.g. lossy `entity.changed` nudges),
- * which carries only opaque ids - each client filters to the ids it renders.
- * Iterates the unique socket registry (not per channel) so a socket registered
- * under both its principal and its per-tab channel still receives each broadcast
- * exactly once.
- */
-export const broadcastToAll = (message: OutboundMessage): void => {
-  const strData = JSON.stringify(message);
-  Object.keys(sockets).forEach(socketId => {
-    sendToSocket(socketId, strData);
-  });
-};
-
-/**
  * Validate and narrow a parsed Redis message to a RealtimeEnvelope, or return
  * null (logging) when it is malformed. A targeted (non-broadcast) envelope must
  * carry a non-empty `routes` array of non-empty strings; a broadcast may omit it.
@@ -527,53 +521,41 @@ function parseRealtimeEnvelope(payload: unknown): RealtimeEnvelope | null {
 }
 
 /**
- * Routes a raw Redis Pub/Sub message to the appropriate sockets by its envelope
- * scope, forwarding the browser-facing `{topic, payload}` (the server-side
- * `routes` are stripped). An `authenticated_global` message is broadcast to every
- * socket; any other scope is targeted to each of its `routes` (principal channels
- * by default, or per-tab channels for task types that opt in). The routes are
- * opaque here - the server does not re-derive or validate them (Superset builds
- * every key from an authorized identity and validates policy-supplied keys before
- * publishing).
+ * Routes a raw Redis Pub/Sub message from a tenant channel. tenantRouting
+ * drops the whole envelope if its channel is not a tenant's, its scope is the
+ * upstream broadcast, or any route lies outside the channel's tenant; it
+ * forwards the browser-facing `{topic, payload}` (routes and scope stripped).
  */
 export const routeRedisMessage = (
   channel: string,
   rawMessage: string,
-): void => {
+): Promise<void> => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawMessage);
   } catch (err) {
     logger.error(`Failed to parse message on channel ${channel}: ${err}`);
-    return;
+    return Promise.resolve();
   }
   const envelope = parseRealtimeEnvelope(parsed);
   if (!envelope) {
     logger.error(`Invalid realtime envelope on channel ${channel}`);
-    return;
+    return Promise.resolve();
   }
-  const outbound: OutboundMessage = {
-    topic: envelope.topic,
-    payload: envelope.payload,
-  };
-  if (envelope.scope === SCOPE_AUTHENTICATED_GLOBAL) {
-    broadcastToAll(outbound);
-    return;
-  }
-  // Targeted (principal/tab) scope: deliver to each named route once.
-  const sent = new Set<string>();
-  (envelope.routes ?? []).forEach(route => {
-    if (sent.has(route)) return;
-    sent.add(route);
-    sendToChannel(route, outbound);
+  return routeEnvelope(channel, envelope, {
+    statsd,
+    logger,
+    subscribersOf: key => subscribersOf(key),
+    totalViewers: viewerCounts.totalViewers,
+    countWritesFailing: viewerCounts.writesFailing,
+    sendToSocket: (id, data) => sendToSocket(id, data),
+    sendToChannel,
   });
 };
 
 /**
- * Subscribes the Redis connection to the single realtime channel
- * (`REALTIME_CHANNEL`, i.e. `<REALTIME_CHANNEL_PREFIX>realtime`) that carries
- * every browser-bound message (broadcast and targeted, distinguished by each
- * envelope's scope).
+ * Subscribes the Redis connection by pattern to every tenant channel
+ * (`t:*:realtime`), which carries every browser-bound message.
  *
  * Pub/Sub is best-effort and not replayable, so there is no server-side catch-up:
  * a message published while a socket was away is simply gone. The browser recovers
@@ -592,18 +574,23 @@ export const subscribeToChannels = async (): Promise<void> => {
   // Bind the router exactly once; retries must not stack duplicate listeners
   // (which would route every message N times).
   if (!messageBound) {
-    redisSubscriber.on('message', (channel: string, message: string) => {
-      routeRedisMessage(channel, message);
-    });
+    redisSubscriber.on(
+      'pmessage',
+      (_pattern: string, channel: string, message: string) => {
+        routeRedisMessage(channel, message).catch(err =>
+          logger.error(`Failed to route message on ${channel}: ${err}`),
+        );
+      },
+    );
     messageBound = true;
   }
   try {
-    await redisSubscriber.subscribe(REALTIME_CHANNEL);
+    await redisSubscriber.psubscribe(REALTIME_PATTERN);
     markSubscriberHealthy();
-    logger.info(`Subscribed to Redis channel: ${REALTIME_CHANNEL}`);
+    logger.info(`Subscribed to Redis channels: ${REALTIME_PATTERN}`);
   } catch (err) {
     logger.error(
-      `Failed to subscribe to Redis channel; retrying in ` +
+      `Failed to subscribe to Redis channels; retrying in ` +
         `${SUBSCRIBE_RETRY_MS}ms: ${err}`,
     );
     setTimeout(subscribeToChannels, SUBSCRIBE_RETRY_MS);
@@ -920,6 +907,10 @@ if (startServer) {
   logger.info(`Server started on port ${opts.port}`);
 
   subscribeToChannels();
+  onCountChange((tenant, uuid, count) => {
+    void viewerCounts.recordCount(tenant, uuid, count);
+  });
+  viewerCounts.start();
 
   setInterval(checkSockets, opts.pingSocketsIntervalMs);
   setInterval(function gc() {
