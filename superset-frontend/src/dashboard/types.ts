@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: version and stale-save state; `unavailable` after a live refresh 404s.
+ * Modified by ZetaIQ: `unavailableReason`, why the dashboard went away.
  */
 import {
   ChartCustomization,
@@ -45,6 +46,7 @@ import Subject from 'src/types/Subject';
 import { TagType } from 'src/components/Tag/TagType';
 import { ChartState } from '../explore/types';
 import { AutoRefreshStatus } from './types/autoRefresh';
+import type { UnavailableReason } from './live/classifyEvent';
 import type { Versions } from './live/versionTracker';
 import type { StaleSummary } from './live/changeSummary';
 
@@ -126,6 +128,8 @@ export type DashboardState = {
   fullSizeChartId: number | null;
   /** a live refresh found the dashboard deleted, unpublished or unshared */
   unavailable?: boolean;
+  /** why it went away, when known (spec §7.7) */
+  unavailableReason?: UnavailableReason;
   isRefreshing: boolean;
   isFiltersRefreshing: boolean;
   hasUnsavedChanges: boolean;

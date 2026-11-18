@@ -21,6 +21,7 @@
  * Modified by ZetaIQ: the editor's "Dashboard changed" modal, the header
  * badge's state, and "no longer available" in place of a gone dashboard
  * (once any unsaved edits are discarded).
+ * Modified by ZetaIQ: says why the dashboard went away; "Update waiting".
  */
 import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
 import { Global } from '@emotion/react';
@@ -64,6 +65,7 @@ import {
 } from 'src/dashboard/live/useDashboardLive';
 import DashboardChangedModal from 'src/dashboard/components/DashboardChangedModal';
 import DashboardUnavailable from 'src/dashboard/components/DashboardUnavailable';
+import type { UnavailableReason } from 'src/dashboard/live/classifyEvent';
 import type { DashboardChartStates } from 'src/dashboard/types/chartState';
 
 import { nanoid } from 'nanoid';
@@ -199,11 +201,15 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   const live = useDashboardLive(
     liveEnabled && hydratedDashboardId === id ? (hydratedUuid ?? '') : '',
   );
-  // a refresh answered 404, or a `deleted` event
-  const unavailable =
-    useSelector<RootState, boolean>(
-      state => !!state.dashboardState?.unavailable,
-    ) || live.unavailable;
+  // a refresh answered 404, or a `deleted` event; why, when known
+  const storeUnavailable = useSelector<RootState, boolean>(
+    state => !!state.dashboardState?.unavailable,
+  );
+  const storeReason = useSelector<RootState, UnavailableReason | undefined>(
+    state => state.dashboardState?.unavailableReason,
+  );
+  const unavailable = storeUnavailable || live.unavailable;
+  const unavailableReason = live.unavailable ? 'deleted' : storeReason;
   // an editor's unsaved work is not taken off screen (a notice says the
   // dashboard is gone); the page is replaced once they discard or leave
   const unsavedEdits = useSelector<RootState, boolean>(
@@ -218,6 +224,7 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
       names: live.summary?.authors ?? [],
       chartOnly: live.chartOnly,
       gone: unavailable,
+      waiting: live.waiting,
       open: live.openPrompt,
     }),
     [
@@ -226,6 +233,7 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
       live.summary,
       live.chartOnly,
       unavailable,
+      live.waiting,
       live.openPrompt,
     ],
   );
@@ -470,7 +478,8 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     );
   }
 
-  if (unavailable && !unsavedEdits) return <DashboardUnavailable />;
+  if (unavailable && !unsavedEdits)
+    return <DashboardUnavailable reason={unavailableReason} />;
 
   return (
     <>

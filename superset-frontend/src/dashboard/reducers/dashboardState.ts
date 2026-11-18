@@ -19,6 +19,7 @@
  * Modified by ZetaIQ: holds a full save refused as stale.
  * Modified by ZetaIQ: `unavailable` after a live refresh 404s; a re-hydrate
  * copies tabActivationTimes instead of mutating the previous state's.
+ * Modified by ZetaIQ: `unavailableReason`, why the dashboard went away.
  */
 /* eslint-disable camelcase */
 import { JsonObject } from '@superset-ui/core';
@@ -63,6 +64,7 @@ import {
   DASHBOARD_UNAVAILABLE,
 } from '../actions/dashboardState';
 import { HYDRATE_DASHBOARD } from '../actions/hydrate';
+import type { UnavailableReason } from '../live/classifyEvent';
 import {
   SET_AUTO_REFRESH_STATUS,
   SET_AUTO_REFRESH_PAUSED,
@@ -110,6 +112,7 @@ interface DashboardStateShape {
   focusedFilterField?: { chartId: number; column: string } | null;
   fullSizeChartId?: number | null;
   unavailable?: boolean;
+  unavailableReason?: UnavailableReason;
   datasetsStatus?: string;
   overwriteConfirmMetadata?: JsonObject;
   nativeFiltersBarOpen?: boolean;
@@ -135,6 +138,7 @@ interface Slice {
 
 interface DashboardStateAction {
   type: string;
+  reason?: UnavailableReason;
   slice?: Slice;
   sliceId?: number;
   isStarred?: boolean;
@@ -185,6 +189,7 @@ export default function dashboardStateReducer(
         ...state,
         ...action.data?.dashboardState,
         unavailable: false,
+        unavailableReason: undefined,
       };
       // Initialize tab activation times for initially active tabs
       if (hydratedState.activeTabs && hydratedState.activeTabs.length > 0) {
@@ -199,7 +204,11 @@ export default function dashboardStateReducer(
       return hydratedState;
     },
     [DASHBOARD_UNAVAILABLE](): DashboardStateShape {
-      return { ...state, unavailable: true };
+      return {
+        ...state,
+        unavailable: true,
+        unavailableReason: action.reason,
+      };
     },
     [ADD_SLICE](): DashboardStateShape {
       const updatedSliceIds = new Set(state.sliceIds);

@@ -46,6 +46,7 @@ import type {
 } from 'src/dashboard/types';
 import type { AppDispatch } from 'src/views/store';
 import { carryDataMask, LiveFilter } from './carryDataMask';
+import type { UnavailableReason } from './classifyEvent';
 import { NO_VERSIONS, ownWritesInFlight } from './versionTracker';
 
 export type RefreshResult = 'applied' | 'skipped' | 'gone';
@@ -54,6 +55,8 @@ export type RefreshOptions = {
   history: History;
   /** chart ids named by the events this refresh answers */
   charts: number[];
+  /** why the page goes away if the dashboard answers 404, when known */
+  reason?: UnavailableReason;
 };
 
 type HydrateDispatch = Parameters<ReturnType<typeof hydrateDashboard>>[0];
@@ -146,7 +149,7 @@ function correctSlug(
  * not the one asked for: the caller asks the server again.
  */
 export const refreshInPlace =
-  (id: number, { history, charts: named }: RefreshOptions) =>
+  (id: number, { history, charts: named, reason }: RefreshOptions) =>
   async (dispatch: AppDispatch, getState: GetState): Promise<RefreshResult> => {
     // An own write adopting a newer version while the GETs are out would be
     // undone by applying them (the base would go backwards), so the base
@@ -163,7 +166,7 @@ export const refreshInPlace =
       // deleted, unpublished or no longer shared with this person
       if ((error as { status?: number })?.status !== 404) throw error;
       if (getState().dashboardInfo.id !== id) return 'skipped';
-      dispatch(dashboardUnavailable());
+      dispatch(dashboardUnavailable(reason));
       return 'gone';
     }
     const [{ json, response }, chartList] = responses;

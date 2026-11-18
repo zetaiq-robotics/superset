@@ -28,7 +28,15 @@ export type DashboardChanged = {
   etag?: string;
   /** the dashboard's own version number; absent on delete */
   version?: number;
-  reason: 'dashboard' | 'chart' | 'access' | 'rollout' | 'deleted' | 'catch-up';
+  reason:
+    | 'dashboard'
+    | 'chart'
+    | 'access'
+    | 'rollout'
+    | 'deleted'
+    /** published → draft: only its editors can still open it */
+    | 'unpublished'
+    | 'catch-up';
   /** only for `chart`; a chart with no etag was deleted */
   charts?: { id: number; etag?: string }[];
   spread_ms?: number;
@@ -51,6 +59,9 @@ export type LiveView = {
   promptedBase: string | null | undefined;
 };
 
+/** Why the open dashboard went away; undefined when not known. */
+export type UnavailableReason = 'deleted' | 'unpublished' | 'access';
+
 export type LiveOutcome =
   | 'ignore'
   | 'refresh'
@@ -66,9 +77,10 @@ export function classifyEvent(ev: DashboardChanged, s: LiveView): LiveOutcome {
   const v = versionOf(ev.etag ?? null);
   const known =
     v !== null && (v === s.versions.base || v === s.versions.latest);
-  if (ev.reason === 'dashboard') {
-    // Only a dashboard save moves the version number; chart, access and
-    // rollout events carry it unchanged, so it orders dashboard events only.
+  if (ev.reason === 'dashboard' || ev.reason === 'unpublished') {
+    // Only a dashboard save (an unpublish among them) moves the version
+    // number; chart, access and rollout events carry it unchanged, so it
+    // orders dashboard events only.
     const older =
       ev.version != null && s.maxVersion != null && ev.version <= s.maxVersion;
     if (older || known) return 'ignore';
@@ -82,7 +94,8 @@ export function classifyEvent(ev: DashboardChanged, s: LiveView): LiveOutcome {
 
   if (s.editMode && s.hasUnsavedChanges) {
     // not a save, so nothing the editor's copy is behind on; a lost
-    // permission shows up as the save's 403
+    // permission shows up as the save's 403. An unpublish is a new version:
+    // told like any other save.
     if (ev.reason === 'access') return 'ignore';
     return s.promptedBase === s.versions.base ? 'badge' : 'prompt';
   }

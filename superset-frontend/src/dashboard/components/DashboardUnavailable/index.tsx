@@ -16,16 +16,58 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { useHistory } from 'react-router-dom';
 import { EmptyState } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
+import type { UnavailableReason } from 'src/dashboard/live/classifyEvent';
+import { RoutePaths } from 'src/views/routePaths';
 
-/** The open dashboard was deleted, unpublished or unshared (spec §7.7). */
-export default function DashboardUnavailable() {
+const copy = (reason?: UnavailableReason) => {
+  switch (reason) {
+    case 'deleted':
+      return [
+        t('This dashboard was deleted.'),
+        t('Someone who manages it can restore it from the archive.'),
+      ];
+    case 'unpublished':
+      return [
+        t('This dashboard was moved back to draft.'),
+        t('Only its editors can see it until it is published again.'),
+      ];
+    case 'access':
+      return [
+        t('You no longer have access to this dashboard.'),
+        t('Ask its owner to share it with you again.'),
+      ];
+    default:
+      return [
+        t('This dashboard is no longer available to you.'),
+        t(
+          'It may have been deleted, moved to draft, or no longer shared with you.',
+        ),
+      ];
+  }
+};
+
+/**
+ * The open dashboard was deleted, unpublished or unshared (spec §7.7):
+ * why, when known, and the way back to the list.
+ */
+export default function DashboardUnavailable({
+  reason,
+}: {
+  reason?: UnavailableReason;
+}) {
+  const history = useHistory();
+  const [title, description] = copy(reason);
   return (
     <EmptyState
       size="large"
       image="empty-dashboard.svg"
-      title={t('This dashboard is no longer available.')}
+      title={title}
+      description={description}
+      buttonText={t('Back to dashboards')}
+      buttonAction={() => history.push(RoutePaths.DASHBOARD_LIST)}
     />
   );
 }

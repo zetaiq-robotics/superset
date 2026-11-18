@@ -17,6 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a test for the "no longer available" view.
+ * Modified by ZetaIQ: tests for its reason-specific copy.
  */
 import type { ReactNode } from 'react';
 import { Suspense } from 'react';
@@ -621,10 +622,41 @@ test('unavailable view on 404', async () => {
     },
   );
 
+  // found on a catch-up, or after a save: the reason is not known
   expect(
-    await screen.findByText('This dashboard is no longer available.'),
+    await screen.findByText('This dashboard is no longer available to you.'),
   ).toBeInTheDocument();
   expect(screen.queryByText('DashboardBuilder')).not.toBeInTheDocument();
+});
+
+test('the unavailable view says why, and leads back to the list', async () => {
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="1" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: { id: 1, metadata: {} },
+        dashboardState: {
+          sliceIds: [],
+          unavailable: true,
+          unavailableReason: 'unpublished',
+        },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+
+  expect(
+    await screen.findByText('This dashboard was moved back to draft.'),
+  ).toBeInTheDocument();
+  await userEvent.click(
+    screen.getByRole('button', { name: 'Back to dashboards' }),
+  );
+  expect(window.location.pathname).toBe('/dashboard/list/');
 });
 
 test('an editor with unsaved changes keeps the page when it is gone', async () => {
@@ -654,7 +686,7 @@ test('an editor with unsaved changes keeps the page when it is gone', async () =
   // data-test attribute)
   expect(await screen.findByText('DashboardBuilder')).toBeInTheDocument();
   expect(
-    screen.queryByText('This dashboard is no longer available.'),
+    screen.queryByText('This dashboard is no longer available to you.'),
   ).not.toBeInTheDocument();
 });
 

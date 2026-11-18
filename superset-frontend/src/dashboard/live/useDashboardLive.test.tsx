@@ -198,12 +198,14 @@ test('a viewer is told, then refreshed after the spread', async () => {
   const { store } = setup();
   mockLive = 'v2';
   changed('v2', 2);
-  expect(toasts(store)).toEqual(['Dashboard updated']);
+  // told once the new copy is on screen, not before
+  expect(toasts(store)).toEqual([]);
   await advance(499);
   expect(refresh).not.toHaveBeenCalled();
   await advance(1);
   expect(refresh).toHaveBeenCalledTimes(1);
   expect(refresh.mock.calls[0][0]).toBe(ID);
+  expect(toasts(store)).toEqual(['Dashboard updated']);
 });
 
 test('hidden tab defers until visibilitychange', async () => {
@@ -263,13 +265,15 @@ test('three events while hidden → one refresh to the newest', async () => {
   changed('v2', 2);
   changed('v3', 3);
   changed('v4', 4);
-  expect(toasts(store)).toHaveLength(1);
+  expect(toasts(store)).toHaveLength(0);
   await advance(60_000);
   send.mockClear();
 
   await setVisibility('visible');
   await advance(0);
   expect(refresh).toHaveBeenCalledTimes(1);
+  // one toast, once the refresh applied
+  expect(toasts(store)).toEqual(['Dashboard updated']);
   expect((store.getState() as any).dashboardInfo.versions).toEqual({
     base: 'v4',
     latest: 'v4',
@@ -819,4 +823,168 @@ test('a write that never settles stops holding after 30 s', async () => {
   expect(subscribes()).toBeGreaterThanOrEqual(1);
   await act(async () => unstick());
   await advance(1);
+});
+
+// notices: toast after the refresh, the reason of a 404, "Update waiting"
+
+const event = (reason: string, extra: object = {}) =>
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      reason,
+      spread_ms: 0,
+      ...extra,
+    }),
+  );
+// the stub refresh answers 404, as the real one does
+const refreshGone = () =>
+  refresh.mockImplementation(
+    (_id: number, { reason }: { reason?: string }) =>
+      (dispatch: (action: unknown) => void) => {
+        dispatch(dashboardUnavailable(reason as any));
+        return Promise.resolve('gone');
+      },
+  );
+
+test('an unpublish that 404s shows no "Dashboard updated" toast, only the unavailable view', async () => {
+  const { store } = setup();
+  refreshGone();
+  event('unpublished', { etag: 'v2', version: 2 });
+  expect(toasts(store)).toEqual([]);
+  await advance(1);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(refresh.mock.calls[0][1].reason).toBe('unpublished');
+  expect(state(store).dashboardState).toMatchObject({
+    unavailable: true,
+    unavailableReason: 'unpublished',
+  });
+  await advance(60_000);
+  expect(toasts(store)).toEqual([]);
+});
+
+test('an access change that 404s carries reason access; others none', async () => {
+  const { store } = setup();
+  refreshGone();
+  event('access', { etag: 'v1', version: 1 });
+  await advance(1);
+  await advance(1);
+  expect(refresh.mock.calls[0][1].reason).toBe('access');
+  expect(state(store).dashboardState.unavailableReason).toBe('access');
+  expect(toasts(store)).toEqual([]);
+});
+
+test('a dashboard save that 404s has no known reason', async () => {
+  const { store } = setup();
+  refreshGone();
+  changed('v2', 2, 0);
+  await advance(1);
+  await advance(1);
+  expect(refresh.mock.calls[0][1].reason).toBeUndefined();
+  expect(state(store).dashboardState.unavailableReason).toBeUndefined();
+  expect(toasts(store)).toEqual([]);
+});
+
+test('a deferred refresh that 404s adds no second toast', async () => {
+  const { store } = setup();
+  refreshGone();
+  document.body.innerHTML =
+    '<button class="filter-bar__apply-button">Apply filters</button>';
+  event('unpublished', { etag: 'v2', version: 2 });
+  expect(toasts(store)).toEqual([
+    "Dashboard updated. It will refresh when you're done.",
+  ]);
+  document.querySelector('button')!.setAttribute('disabled', 'disabled');
+  await advance(1000);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(toasts(store)).toEqual([
+    "Dashboard updated. It will refresh when you're done.",
+  ]);
+});
+
+test('a deferred refresh that applies adds no second toast', async () => {
+  const { store } = setup();
+  document.body.innerHTML =
+    '<button class="filter-bar__apply-button">Apply filters</button>';
+  mockLive = 'v2';
+  changed('v2', 2, 0);
+  document.querySelector('button')!.setAttribute('disabled', 'disabled');
+  await advance(1000);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(toasts(store)).toEqual([
+    "Dashboard updated. It will refresh when you're done.",
+  ]);
+});
+
+test('a failed refresh shows no toast', async () => {
+  const { store } = setup();
+  refresh.mockImplementation(() => () => Promise.resolve('skipped'));
+  changed('v2', 2, 0);
+  await advance(1);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(toasts(store)).toEqual([]);
+});
+
+test('"Update waiting" stands while a deferred refresh waits, gone once it runs', async () => {
+  const { hook } = setup();
+  expect(hook.result.current.waiting).toBe(false);
+  document.body.innerHTML =
+    '<button class="filter-bar__apply-button">Apply filters</button>';
+  mockLive = 'v2';
+  changed('v2', 2, 0);
+  expect(hook.result.current.waiting).toBe(true);
+  await advance(30_000);
+  expect(hook.result.current.waiting).toBe(true);
+  document.querySelector('button')!.setAttribute('disabled', 'disabled');
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(hook.result.current.waiting).toBe(false);
+});
+
+test('"Update waiting" goes when the dashboard is deleted', async () => {
+  const { hook } = setup();
+  document.body.innerHTML =
+    '<button class="filter-bar__apply-button">Apply filters</button>';
+  changed('v2', 2, 0);
+  expect(hook.result.current.waiting).toBe(true);
+  event('deleted');
+  expect(hook.result.current.waiting).toBe(false);
+});
+
+test('an unpublish while editing prompts like a save, then counts on the badge', async () => {
+  const { hook, store } = setup(EDITING);
+  event('unpublished', { etag: 'v2', version: 2 });
+  await act(async () => {});
+  // a new version: "Dashboard changed", with who and when
+  expect(hook.result.current.prompt).toBe(true);
+  expect(hook.result.current.badgeCount).toBe(1);
+  expect(hook.result.current.chartOnly).toBe(false);
+  expect(hook.result.current.summary?.changedBy).toBe('Priya');
+  expect(state(store).dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v2',
+  });
+
+  // Keep editing, then another unpublish (after a re-publish): badge +1
+  act(() => hook.result.current.dismissPrompt());
+  event('unpublished', { etag: 'v3', version: 3 });
+  await act(async () => {});
+  expect(hook.result.current.prompt).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(2);
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+test('the same unpublished event twice refreshes once', async () => {
+  setup();
+  mockLive = 'v2';
+  event('unpublished', { etag: 'v2', version: 2 });
+  await advance(1);
+  await advance(1);
+  event('unpublished', { etag: 'v2', version: 2 });
+  await advance(60_000);
+  expect(refresh).toHaveBeenCalledTimes(1);
 });
