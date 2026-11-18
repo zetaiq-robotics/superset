@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: introspection settings replace the JWT settings.
+// Modified by ZetaIQ: introspection and access-check settings replace the JWT settings.
 import { buildConfig } from '../src/config';
 import { expect, test } from 'vitest';
 
@@ -27,6 +27,10 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
     'http://control-plane.test/internal/v1/auth/introspect',
   );
   expect(config.maxSocketsPerPerson).toEqual(20);
+  expect(config.accessCheckUrl).toEqual(
+    'http://superset.test/api/v1/zeta_live',
+  );
+  expect(config.maxSubscriptionsPerSocket).toEqual(4);
   expect(config.redis.host).toEqual('127.0.0.1');
   expect(config.redis.port).toEqual(6379);
   expect(config.redis.password).toEqual('some pwd');
@@ -44,6 +48,8 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   process.env.INTROSPECT_URL = 'http://cp:8081/internal/v1/auth/introspect';
   process.env.INTROSPECT_INTERVAL_MS = '30000';
   process.env.MAX_SOCKETS_PER_PERSON = '5';
+  process.env.ACCESS_CHECK_URL = 'http://ss:8088/api/v1/zeta_live';
+  process.env.MAX_SUBSCRIPTIONS_PER_SOCKET = '2';
   process.env.REDIS_HOST = '10.10.10.10';
   process.env.REDIS_PORT = '6380';
   process.env.REDIS_PASSWORD = 'admin';
@@ -70,6 +76,8 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   );
   expect(config.introspectIntervalMs).toEqual(30000);
   expect(config.maxSocketsPerPerson).toEqual(5);
+  expect(config.accessCheckUrl).toEqual('http://ss:8088/api/v1/zeta_live');
+  expect(config.maxSubscriptionsPerSocket).toEqual(2);
   expect(config.redis.host).toEqual('10.10.10.10');
   expect(config.redis.port).toEqual(6380);
   expect(config.redis.password).toEqual('admin');
@@ -95,6 +103,8 @@ test('buildConfig() builds configuration and applies env var overrides', () => {
   delete process.env.INTROSPECT_URL;
   delete process.env.INTROSPECT_INTERVAL_MS;
   delete process.env.MAX_SOCKETS_PER_PERSON;
+  delete process.env.ACCESS_CHECK_URL;
+  delete process.env.MAX_SUBSCRIPTIONS_PER_SOCKET;
   delete process.env.REDIS_HOST;
   delete process.env.REDIS_PORT;
   delete process.env.REDIS_PASSWORD;

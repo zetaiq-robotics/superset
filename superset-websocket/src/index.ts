@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-// Modified by ZetaIQ: identity from the gateway's delegated token (introspection) replaces the JWT cookie; per-person cap, SIGTERM close.
+// Modified by ZetaIQ: identity from the gateway's delegated token (introspection) replaces the JWT cookie; per-person cap, SIGTERM close;
+// per-dashboard subscribe/unsubscribe frames (1 KB frame cap).
 import * as http from 'http';
 import * as net from 'net';
 import { readFileSync } from 'fs';
@@ -36,6 +37,7 @@ import {
   identityFromRequest,
   watchIdentity,
 } from './gatewayAuth.js';
+import { watchSubscriptions } from './subscriptions.js';
 import {
   checkServerIdentity,
   ConnectionOptions,
@@ -108,6 +110,10 @@ export const statsd = new StatsD({
 
 if (startServer && !opts.introspectUrl) {
   logger.error('Please provide introspectUrl (INTROSPECT_URL)');
+  process.exit(1);
+}
+if (startServer && !opts.accessCheckUrl) {
+  logger.error('Please provide accessCheckUrl (ACCESS_CHECK_URL)');
   process.exit(1);
 }
 
@@ -204,6 +210,8 @@ const httpServer = http.createServer();
 export const wss = new WebSocketServer({
   noServer: true,
   clientTracking: false,
+  // Inbound frames are only subscribe/unsubscribe; a larger one closes 1009.
+  maxPayload: 1024,
 });
 
 const SOCKET_ACTIVE_STATES: number[] = [WebSocket.OPEN, WebSocket.CONNECTING];
@@ -395,7 +403,7 @@ export const trackClient = (
  * given, a missing/terminated/errored socket triggers a `cleanChannel` on it;
  * broadcast callers omit it (the next targeted send or GC prunes the socket).
  */
-const sendToSocket = (
+export const sendToSocket = (
   socketId: string,
   strData: string,
   cleanupChannel?: string,
@@ -656,6 +664,7 @@ export const wsConnection = (
     (channels[tabChannel] ??= { sockets: [] }).sockets.push(socketId);
   }
   watchIdentity(ws, identity);
+  watchSubscriptions(ws, socketId, identity);
   logger.debug(
     `socket ${socketId} connected on channel ${channel}` +
       (tabChannel ? ` (tab channel ${tabChannel})` : ''),
