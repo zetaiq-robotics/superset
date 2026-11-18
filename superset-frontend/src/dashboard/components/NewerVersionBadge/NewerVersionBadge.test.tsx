@@ -47,3 +47,16 @@ test('nothing newer: no badge', () => {
   render(<NewerVersionBadge count={0} names={[]} onClick={jest.fn()} />);
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
 });
+
+test('chart changes only: says so, without naming anyone', async () => {
+  render(
+    <NewerVersionBadge count={2} names={[]} chartOnly onClick={jest.fn()} />,
+  );
+  const badge = screen.getByRole('button', {
+    name: 'Newer version available',
+  });
+  await userEvent.hover(badge);
+  expect(
+    await screen.findByText('A chart on this dashboard was changed.'),
+  ).toBeInTheDocument();
+});

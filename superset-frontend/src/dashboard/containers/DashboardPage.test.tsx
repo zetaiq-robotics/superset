@@ -624,7 +624,38 @@ test('unavailable view on 404', async () => {
   expect(
     await screen.findByText('This dashboard is no longer available.'),
   ).toBeInTheDocument();
-  expect(screen.queryByTestId('dashboard-builder')).not.toBeInTheDocument();
+  expect(screen.queryByText('DashboardBuilder')).not.toBeInTheDocument();
+});
+
+test('an editor with unsaved changes keeps the page when it is gone', async () => {
+  // deleted while they edit: their work stays on screen (a notice says so)
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="1" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: { id: 1, metadata: {} },
+        dashboardState: {
+          sliceIds: [],
+          unavailable: true,
+          editMode: true,
+          hasUnsavedChanges: true,
+        },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+
+  // the mocked builder renders this text (its testid is not the suite's
+  // data-test attribute)
+  expect(await screen.findByText('DashboardBuilder')).toBeInTheDocument();
+  expect(
+    screen.queryByText('This dashboard is no longer available.'),
+  ).not.toBeInTheDocument();
 });
 
 test('clears undo history after hydrating the dashboard', async () => {

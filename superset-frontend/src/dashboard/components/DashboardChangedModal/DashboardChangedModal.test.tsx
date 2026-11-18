@@ -84,3 +84,21 @@ test('hidden when show is false', () => {
   );
   expect(screen.queryByText('Dashboard changed')).not.toBeInTheDocument();
 });
+
+test('chart changes only: no name, no claim the edits are stale', async () => {
+  render(
+    <DashboardChangedModal
+      show
+      chartOnly
+      summary={null}
+      onDiscard={jest.fn()}
+      onKeepEditing={jest.fn()}
+    />,
+  );
+  expect(
+    await screen.findByText('A chart on this dashboard was changed.'),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText(/Your unsaved changes are based/),
+  ).not.toBeInTheDocument();
+});

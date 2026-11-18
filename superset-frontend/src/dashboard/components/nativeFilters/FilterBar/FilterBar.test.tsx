@@ -15,10 +15,14 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a test that a default-only filter change keeps the
+ * viewer's selection.
  */
 
 import {
   act,
+  createStore,
   fireEvent,
   render,
   screen,
@@ -39,6 +43,9 @@ import { FILTER_BAR_TEST_ID } from './utils';
 import FilterBar from '.';
 import { FILTERS_CONFIG_MODAL_TEST_ID } from '../FiltersConfigModal/FiltersConfigModal';
 import * as dataMaskActions from 'src/dataMask/actions';
+import reducerIndex from 'spec/helpers/reducerIndex';
+import { SET_NATIVE_FILTERS_CONFIG_COMPLETE } from 'src/dashboard/actions/nativeFilters';
+import { nativeFiltersConfigChanged } from 'src/dashboard/actions/dashboardInfo';
 
 jest.useFakeTimers({ advanceTimers: true });
 
@@ -1359,4 +1366,101 @@ test('FilterBar with orientation=Vertical renders Vertical layout (sanity counte
   expect(
     screen.queryByRole('img', { name: 'setting' }),
   ).not.toBeInTheDocument();
+});
+
+test('a default-only filter change keeps the selection shown and Apply off', async () => {
+  fetchMock.post(
+    'glob:*/api/v1/chart/data',
+    {
+      result: [
+        {
+          data: [{ test_column: 'East' }, { test_column: 'West' }],
+          colnames: ['test_column'],
+          coltypes: [1],
+        },
+      ],
+    },
+    { name: 'default-only-chart-data' },
+  );
+  const filterId = 'NATIVE_FILTER-default-only';
+  const filter = createFilter({
+    id: filterId,
+    name: 'Region',
+    targets: [{ datasetId: 7, column: { name: 'test_column' } }],
+    defaultDataMask: {
+      filterState: { value: ['East'] },
+      extraFormData: {
+        filters: [{ col: 'test_column', op: 'IN', val: ['East'] }],
+      },
+    },
+    chartsInScope: [18],
+  });
+  const shown = () =>
+    Array.from(document.querySelectorAll('.ant-select-selection-item')).map(
+      el => el.textContent,
+    );
+  const store = createStore(
+    {
+      ...stateWithoutNativeFilters,
+      dashboardInfo: {
+        id: 1,
+        dash_edit_perm: true,
+        filterBarOrientation: FilterBarOrientation.Vertical,
+        metadata: {
+          native_filter_configuration: [filter],
+          chart_configuration: {},
+        },
+      },
+      dashboardState: {
+        ...stateWithoutNativeFilters.dashboardState,
+        activeTabs: ['ROOT_ID'],
+      },
+      dataMask: {
+        [filterId]: createDataMask(filterId, ['West'], {
+          filters: [{ col: 'test_column', op: 'IN', val: ['West'] }],
+        }),
+      },
+      nativeFilters: { filters: { [filterId]: filter }, filtersState: {} },
+    },
+    reducerIndex,
+  );
+  render(
+    <FilterBar
+      orientation={FilterBarOrientation.Vertical}
+      verticalConfig={{
+        width: 280,
+        height: 400,
+        offset: 0,
+        ...createOpenedBarProps(),
+      }}
+    />,
+    { store, useDnd: true, useRouter: true },
+  );
+  await act(async () => {
+    jest.advanceTimersByTime(1000);
+  });
+  await waitFor(() => expect(shown()).toEqual(['West']));
+
+  // someone changed only the filter's default; a live refresh brings it in
+  const changed = {
+    ...filter,
+    defaultDataMask: {
+      filterState: { value: ['North'] },
+      extraFormData: {
+        filters: [{ col: 'test_column', op: 'IN', val: ['North'] }],
+      },
+    },
+  };
+  await act(async () => {
+    store.dispatch({
+      type: SET_NATIVE_FILTERS_CONFIG_COMPLETE,
+      filterChanges: [changed],
+    });
+    store.dispatch(nativeFiltersConfigChanged([changed]));
+    jest.advanceTimersByTime(1000);
+  });
+
+  expect(shown()).toEqual(['West']);
+  expect(screen.getByTestId(getTestId('apply-button'))).toBeDisabled();
+  fetchMock.removeRoute('default-only-chart-data');
 });

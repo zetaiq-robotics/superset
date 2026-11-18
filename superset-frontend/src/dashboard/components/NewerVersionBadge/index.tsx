@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Button } from '@superset-ui/core/components';
+import { Button, Tooltip } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
 
 type Props = {
@@ -24,22 +24,29 @@ type Props = {
   count: number;
   /** their authors, each once */
   names: string[];
+  /** every save counted was a chart's: nobody to name, nothing stale */
+  chartOnly?: boolean;
   /** offers "Discard my changes" / "Keep editing" again */
   onClick: () => void;
 };
 
 /** The header badge of an editor who chose "Keep editing" (spec §7.8). */
-export default function NewerVersionBadge({ count, names, onClick }: Props) {
+export default function NewerVersionBadge({
+  count,
+  names,
+  chartOnly = false,
+  onClick,
+}: Props) {
   if (count < 1) return null;
   const label =
-    count > 1 && names.length
+    count > 1 && names.length && !chartOnly
       ? t(
           'Newer version available (%s saves by %s)',
           count,
           new Intl.ListFormat(undefined, { type: 'conjunction' }).format(names),
         )
       : t('Newer version available');
-  return (
+  const badge = (
     <Button
       buttonSize="small"
       buttonStyle="secondary"
@@ -48,5 +55,12 @@ export default function NewerVersionBadge({ count, names, onClick }: Props) {
     >
       {label}
     </Button>
+  );
+  return chartOnly ? (
+    <Tooltip title={t('A chart on this dashboard was changed.')}>
+      {badge}
+    </Tooltip>
+  ) : (
+    badge
   );
 }

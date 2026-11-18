@@ -24,7 +24,13 @@ import { t } from '@apache-superset/core/translation';
 import { DataMaskWithId, SupersetClient } from '@superset-ui/core';
 import { addInfoToast } from 'src/components/MessageToasts/actions';
 import { DASHBOARD_GET_COLUMNS } from 'src/hooks/apiResources/dashboards';
+import { logging } from '@apache-superset/core/utils';
 import { dashboardUnavailable } from 'src/dashboard/actions/dashboardState';
+import { fetchDatasourceMetadata } from 'src/dashboard/actions/datasources';
+import {
+  selectIsDashboardVersionPreviewActive,
+  VersionHistoryRootState,
+} from 'src/features/versionHistory/reducer';
 import {
   hydrateDashboard,
   HydrateChartData,
@@ -32,9 +38,17 @@ import {
 } from 'src/dashboard/actions/hydrate';
 import { getInitialDataMask } from 'src/dataMask/reducer';
 import { TABS_TYPE } from 'src/dashboard/util/componentTypes';
-import type { Chart, DashboardLayout, GetState } from 'src/dashboard/types';
+import type {
+  Chart,
+  DashboardLayout,
+  GetState,
+  Slice,
+} from 'src/dashboard/types';
 import type { AppDispatch } from 'src/views/store';
 import { carryDataMask, LiveFilter } from './carryDataMask';
+import { NO_VERSIONS, ownWritesInFlight } from './versionTracker';
+
+export type RefreshResult = 'applied' | 'skipped' | 'gone';
 
 export type RefreshOptions = {
   history: History;
@@ -126,10 +140,18 @@ function correctSlug(
  * It goes out as a HYDRATE_DASHBOARD flagged `live`: built by the page's
  * own hydration, then given back the viewer's state, so every reducer
  * takes the new definition in one step.
+ *
+ * Resolves `applied`, `gone` (404: the page shows "no longer available"),
+ * or `skipped` when the copy fetched may already be stale or the page is
+ * not the one asked for: the caller asks the server again.
  */
 export const refreshInPlace =
   (id: number, { history, charts: named }: RefreshOptions) =>
-  async (dispatch: AppDispatch, getState: GetState): Promise<void> => {
+  async (dispatch: AppDispatch, getState: GetState): Promise<RefreshResult> => {
+    // An own write adopting a newer version while the GETs are out would be
+    // undone by applying them (the base would go backwards), so the base
+    // they started from must still hold when they land.
+    const startBase = (getState().dashboardInfo.versions ?? NO_VERSIONS).base;
     const q = rison.encode({ columns: DASHBOARD_GET_COLUMNS });
     let responses;
     try {
@@ -140,17 +162,25 @@ export const refreshInPlace =
     } catch (error) {
       // deleted, unpublished or no longer shared with this person
       if ((error as { status?: number })?.status !== 404) throw error;
-      if (getState().dashboardInfo.id === id) dispatch(dashboardUnavailable());
-      return;
+      if (getState().dashboardInfo.id !== id) return 'skipped';
+      dispatch(dashboardUnavailable());
+      return 'gone';
     }
     const [{ json, response }, chartList] = responses;
     const before = getState();
-    // the tab moved to another dashboard, or its editor started changing it
+    // the tab moved to another dashboard, its editor started changing it,
+    // an own write moved (or may be moving) the base, or a version preview
+    // is on screen
     if (
       before.dashboardInfo.id !== id ||
-      before.dashboardState.hasUnsavedChanges
+      before.dashboardState.hasUnsavedChanges ||
+      (before.dashboardInfo.versions ?? NO_VERSIONS).base !== startBase ||
+      ownWritesInFlight() > 0 ||
+      selectIsDashboardVersionPreviewActive(
+        before as unknown as VersionHistoryRootState,
+      )
     ) {
-      return;
+      return 'skipped';
     }
 
     const { result } = json as { result: Record<string, unknown> };
@@ -186,12 +216,14 @@ export const refreshInPlace =
     Object.entries(charts).forEach(([key, fresh]) => {
       const old = before.charts[Number(key)];
       if (!old) return;
+      const was = before.sliceEntities.slices[Number(key)];
+      const now = data.sliceEntities.slices[key];
+      // The charts endpoint carries no query_context; any chart save moves
+      // changed_on, so a query_context-only change still re-queries.
       const changed =
         named.includes(Number(key)) ||
-        !isEqual(
-          before.sliceEntities.slices[Number(key)]?.form_data,
-          data.sliceEntities.slices[key].form_data,
-        );
+        !isEqual(was?.form_data, now.form_data) ||
+        was?.changed_on !== now.changed_on;
       charts[key] = changed
         ? {
             ...old,
@@ -242,6 +274,19 @@ export const refreshInPlace =
     const anchor = topVisibleChart();
     dispatch({ ...hydrated!, live: true });
     correctSlug(before.dashboardInfo.slug, result.slug as string | null, id);
+    // A chart on a dataset the page has not loaded (a new chart, or one
+    // moved to another dataset) would render against a placeholder: the
+    // page only fetches this when its chart count grows. One GET a dataset.
+    const { datasources } = getState();
+    new Set(
+      Object.values(data.sliceEntities.slices as Record<string, Slice>)
+        .map(slice => slice.form_data?.datasource as string | undefined)
+        .filter((key): key is string => !!key && !datasources[key]),
+    ).forEach(key =>
+      Promise.resolve(dispatch(fetchDatasourceMetadata(key))).catch(error =>
+        logging.warn('Live dashboard dataset load failed', error),
+      ),
+    );
     removedFilterNames.forEach(name =>
       dispatch(addInfoToast(t("Filter '%s' was removed", name))),
     );
@@ -252,4 +297,5 @@ export const refreshInPlace =
         if (shift) window.scrollBy(0, shift);
       });
     }
+    return 'applied';
   };

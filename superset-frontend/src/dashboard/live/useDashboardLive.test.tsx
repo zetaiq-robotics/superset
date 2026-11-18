@@ -150,7 +150,7 @@ beforeEach(() => {
   refresh.mockImplementation(
     (id: number) => (dispatch: (action: unknown) => void) => {
       dispatch(setDashboardVersions(id, { base: mockLive, latest: mockLive }));
-      return Promise.resolve();
+      return Promise.resolve('applied');
     },
   );
   history.mockReset();
@@ -222,7 +222,7 @@ test('hidden tab defers until visibilitychange', async () => {
 test('unapplied filter changes defer and are not lost', async () => {
   const { store } = setup();
   document.body.innerHTML =
-    '<button data-test="filter-bar__apply-button">Apply filters</button>';
+    '<button class="filter-bar__apply-button">Apply filters</button>';
   mockLive = 'v2';
   changed('v2', 2);
   expect(toasts(store)).toEqual([
@@ -568,4 +568,255 @@ test('no further refreshes once the dashboard is unavailable', async () => {
   changed('v2', 2, 0);
   await advance(60_000);
   expect(refresh).not.toHaveBeenCalled();
+});
+
+// combined review fixes
+
+const reply = (etag: string, digest = 'x') =>
+  act(() =>
+    mockHandlers.subscribed({
+      dashboard: UUID,
+      ok: true,
+      etag,
+      charts_digest: digest,
+      why: null,
+    }),
+  );
+const subscribes = () =>
+  send.mock.calls.filter(([m]) => m.type === 'subscribe').length;
+
+test('deleted while editing keeps the page and says it is gone', async () => {
+  const { hook, store } = setup(EDITING);
+  act(() =>
+    mockHandlers['dashboard.changed']({ uuid: UUID, reason: 'deleted' }),
+  );
+  expect(hook.result.current.unavailable).toBe(true);
+  // a notice that stays until closed; the unsaved work stays on screen
+  const notice = (store.getState() as any).messageToasts.find(
+    (toast: { text: string }) =>
+      toast.text ===
+      "This dashboard was deleted while you were editing. Your changes stay on screen, but they can't be saved unless the dashboard is restored.",
+  );
+  expect(notice).toMatchObject({ toastType: 'DANGER_TOAST', duration: 0 });
+  expect(state(store).dashboardState.editMode).toBe(true);
+});
+
+test('a refresh waits while an own write is in flight', async () => {
+  setup();
+  mockLive = 'v2';
+  changed('v2', 2, 1000);
+  let finish: () => void = () => {};
+  act(() => {
+    trackOwnWrite(
+      new Promise<void>(resolve => {
+        finish = resolve;
+      }),
+    );
+  });
+  await advance(5000);
+  expect(refresh).not.toHaveBeenCalled();
+  await act(async () => finish());
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('a refresh refreshInPlace skipped is retried with a plain catch-up', async () => {
+  const { store } = setup();
+  refresh.mockImplementationOnce(() => () => Promise.resolve('skipped'));
+  changed('v2', 2, 0);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  // the newer version was not brought in: forgotten, so it is asked again
+  expect(state(store).dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v1',
+  });
+  send.mockClear();
+  await advance(60_000);
+  expect(subscribes()).toBe(1);
+  mockLive = 'v2';
+  reply('"v2:acc"');
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+test('a failed refresh is retried', async () => {
+  const { store } = setup();
+  refresh.mockImplementationOnce(() => () => Promise.reject(new Error('502')));
+  changed('v2', 2, 0);
+  await advance(1);
+  expect(state(store).dashboardInfo.versions.latest).toBe('v1');
+  send.mockClear();
+  await advance(60_000);
+  expect(subscribes()).toBe(1);
+  mockLive = 'v2';
+  reply('"v2:acc"');
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(2);
+  expect(state(store).dashboardInfo.versions.base).toBe('v2');
+});
+
+test('a chart change while editing only updates the badge', async () => {
+  const { hook } = setup(EDITING);
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      etag: 'v1',
+      version: 1,
+      reason: 'chart',
+      charts: [{ id: 3, etag: 'c2' }],
+    }),
+  );
+  await act(async () => {});
+  expect(hook.result.current.prompt).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(1);
+  expect(hook.result.current.chartOnly).toBe(true);
+  expect(history).not.toHaveBeenCalled();
+
+  // a dashboard save still prompts, with who saved it
+  changed('v2', 2);
+  await act(async () => {});
+  expect(hook.result.current.prompt).toBe(true);
+  expect(hook.result.current.chartOnly).toBe(false);
+  expect(hook.result.current.badgeCount).toBe(2);
+  expect(history).toHaveBeenCalledTimes(1);
+});
+
+test('the history read gives up after 5 s', async () => {
+  const { hook } = setup(EDITING);
+  history.mockReturnValue(new Promise(() => {}));
+  changed('v2', 2);
+  expect(hook.result.current.summary).toBeUndefined();
+  await advance(5000);
+  expect(hook.result.current.summary).toBeNull();
+});
+
+test('an access change while editing refreshes once the editor is clean', async () => {
+  const { store } = setup(EDITING);
+  act(() =>
+    mockHandlers['dashboard.changed']({
+      uuid: UUID,
+      etag: 'v1',
+      version: 1,
+      reason: 'access',
+      spread_ms: 0,
+    }),
+  );
+  await advance(60_000);
+  expect(refresh).not.toHaveBeenCalled();
+
+  act(() => {
+    store.dispatch(setUnsavedChanges(false));
+  });
+  await advance(1);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  act(() => {
+    store.dispatch(setUnsavedChanges(true));
+    store.dispatch(setUnsavedChanges(false));
+  });
+  await advance(60_000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+});
+
+test('a reconnect during a refresh does not lose the catch-up', async () => {
+  setup();
+  reply('"v1:acc"');
+  let finish: () => void = () => {};
+  refresh.mockImplementationOnce(
+    (id: number) => (dispatch: (action: unknown) => void) =>
+      new Promise(resolve => {
+        finish = () => {
+          dispatch(setDashboardVersions(id, { base: 'v2', latest: 'v2' }));
+          resolve('applied');
+        };
+      }),
+  );
+  changed('v2', 2, 0);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  // the socket drops and comes back while the refresh is in flight
+  reconnect();
+  await act(async () => finish());
+  // replies arrive in the order sent: the reconnect's first
+  mockLive = 'v3';
+  reply('"v3:acc"');
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+test('an open dialog or a focused field defers the refresh', async () => {
+  setup();
+  document.body.innerHTML =
+    '<div style="display: none"><div role="dialog"></div></div>';
+  changed('v2', 2, 0);
+  await advance(1);
+  // a closed dialog left in the page does not count
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  document.body.innerHTML = '<div role="dialog"></div>';
+  changed('v3', 3, 0);
+  await advance(5000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  document.body.innerHTML = '<input id="f" />';
+  (document.getElementById('f') as HTMLInputElement).focus();
+  await advance(5000);
+  expect(refresh).toHaveBeenCalledTimes(1);
+
+  (document.getElementById('f') as HTMLInputElement).blur();
+  await advance(1000);
+  expect(refresh).toHaveBeenCalledTimes(2);
+});
+
+test("the editor's own write while keeping editing is not counted", async () => {
+  const { hook, store } = setup(EDITING);
+  changed('v2', 2);
+  await act(async () => {});
+  act(() => hook.result.current.dismissPrompt());
+  expect(hook.result.current.badgeCount).toBe(1);
+
+  // a native filter save while behind: replaces v2, creates v3
+  let finish: (body: unknown) => void = () => {};
+  act(() => {
+    trackOwnWrite(
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+    ).then(body => store.dispatch(adoptOwnWrite(ID, body)));
+  });
+  changed('v3', 3);
+  await act(async () => {
+    finish({ old_version_uuid: 'v2', new_version_uuid: 'v3' });
+  });
+  await advance(1);
+  expect(hook.result.current.badgeCount).toBe(1);
+  expect(state(store).dashboardInfo.versions).toEqual({
+    base: 'v1',
+    latest: 'v3',
+  });
+});
+
+test('a write that never settles stops holding after 30 s', async () => {
+  setup();
+  let unstick: () => void = () => {};
+  act(() => {
+    trackOwnWrite(
+      new Promise<void>(resolve => {
+        unstick = resolve;
+      }),
+    );
+  });
+  mockLive = 'v2';
+  changed('v2', 2, 0);
+  send.mockClear();
+  await advance(29_000);
+  expect(refresh).not.toHaveBeenCalled();
+  await advance(1000);
+  await advance(1);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  // and the server is asked for anything else missed
+  expect(subscribes()).toBeGreaterThanOrEqual(1);
+  await act(async () => unstick());
+  await advance(1);
 });

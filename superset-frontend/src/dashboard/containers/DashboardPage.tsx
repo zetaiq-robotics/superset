@@ -19,7 +19,8 @@
  * Modified by ZetaIQ: keeps the open dashboard live when websockets run in
  * gateway mode.
  * Modified by ZetaIQ: the editor's "Dashboard changed" modal, the header
- * badge's state, and "no longer available" in place of a gone dashboard.
+ * badge's state, and "no longer available" in place of a gone dashboard
+ * (once any unsaved edits are discarded).
  */
 import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
 import { Global } from '@emotion/react';
@@ -203,14 +204,30 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     useSelector<RootState, boolean>(
       state => !!state.dashboardState?.unavailable,
     ) || live.unavailable;
+  // an editor's unsaved work is not taken off screen (a notice says the
+  // dashboard is gone); the page is replaced once they discard or leave
+  const unsavedEdits = useSelector<RootState, boolean>(
+    state =>
+      !!state.dashboardState?.editMode &&
+      !!state.dashboardState?.hasUnsavedChanges,
+  );
   const liveBadge = useMemo(
     () => ({
       // the modal itself stands in for the badge while it is open
       count: live.prompt ? 0 : live.badgeCount,
       names: live.summary?.authors ?? [],
+      chartOnly: live.chartOnly,
+      gone: unavailable,
       open: live.openPrompt,
     }),
-    [live.prompt, live.badgeCount, live.summary, live.openPrompt],
+    [
+      live.prompt,
+      live.badgeCount,
+      live.summary,
+      live.chartOnly,
+      unavailable,
+      live.openPrompt,
+    ],
   );
 
   // Get CSS from dashboardInfo (unified properties location)
@@ -453,7 +470,7 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     );
   }
 
-  if (unavailable) return <DashboardUnavailable />;
+  if (unavailable && !unsavedEdits) return <DashboardUnavailable />;
 
   return (
     <>
@@ -476,8 +493,12 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
                 </LiveBadgeContext.Provider>
                 <DashboardChangedModal
                   // shown once the history read has said who saved
-                  show={live.prompt && live.summary !== undefined}
+                  show={
+                    live.prompt &&
+                    (live.chartOnly || live.summary !== undefined)
+                  }
                   summary={live.summary ?? null}
+                  chartOnly={live.chartOnly}
                   onDiscard={live.discard}
                   onKeepEditing={live.dismissPrompt}
                 />
