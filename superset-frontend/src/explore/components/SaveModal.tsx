@@ -644,7 +644,7 @@ const SaveModal = ({
               : actions.createSlice(newSliceName, sliceDashboards, addedTo));
           } catch (error) {
             // ZetaIQ: the empty dashboard made for this chart a moment ago must not stay behind.
-            if (createdDashboardId) {
+            if (createdDashboardId && dashboard) {
               // gone again: a retry creates a new one
               setDashboard({ label: dashboard.label, value: dashboard.label });
               await SupersetClient.delete({
@@ -653,7 +653,7 @@ const SaveModal = ({
                 addDangerToast(
                   t(
                     'The new dashboard "%s" was left empty in its folder',
-                    dashboard?.label,
+                    dashboard.label,
                   ),
                 ),
               );
