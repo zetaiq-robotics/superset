@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  *
- * Modified by ZetaIQ: a parent change drops child picks that left the options;
+ * Modified by ZetaIQ: fresh options drop picks they no longer list;
  * an optional label column names each value.
  */
 /* eslint-disable no-param-reassign */
@@ -364,32 +364,36 @@ export default function PluginFilterSelect(props: PluginFilterSelectProps) {
       .join(' ');
   }, [creatable, data.length, rowLimit, searchAllOptions]);
 
-  // Modified by ZetaIQ: a parent change drops the picks it took out of this
-  // filter's options, as chained dashboard variables do. Only when fresh
-  // options arrive for changed parents, and never on a list capped by the row
-  // limit or narrowed by a server-side search (a client-side search keeps its
-  // typed text after a pick, but the options stay the full list).
-  // Options are compared by value: `data` is a new array on every render, and
-  // the parents change a render before their options arrive.
-  const optionsFor = useRef<{ options: string; parents: string }>();
+  // Modified by ZetaIQ: fresh options drop the picks that left them, as
+  // chained dashboard variables do: a parent change, or a new time window
+  // with no data for a picked value. Only values the previous options listed
+  // go (a value typed into a creatable filter stays), never on the first
+  // options, nor on a list capped by the row limit or narrowed by a
+  // server-side search (a client-side search keeps its typed text after a
+  // pick, but the options stay the full list). Options are compared by
+  // value: `data` is a new array on every render.
+  const optionsFor = useRef<{ key: string; listed: Set<string> }>();
   const keepAvailablePicks = (value: SelectValue): SelectValue => {
-    const parents = JSON.stringify(formData.extraFormData ?? {});
     const listed = data.map(row => String(row[col]));
-    const options = listed.join('\u0001');
+    const key = listed.join('\u0001');
     const prev = optionsFor.current;
-    if (prev?.options === options) return value;
-    optionsFor.current = { options, parents };
+    if (prev?.key === key) return value;
+    optionsFor.current = { key, listed: new Set(listed) };
     if (
-      !prev ||
-      prev.parents === parents ||
-      !Array.isArray(value) ||
+      prev === undefined ||
+      value === null ||
+      value === undefined ||
       (searchAllOptions && search) ||
       (rowLimit && data.length >= rowLimit)
     ) {
       return value;
     }
-    const available = new Set(listed);
-    const kept = value.filter(v => available.has(String(v)));
+    const keep = (v: unknown) =>
+      optionsFor.current!.listed.has(String(v)) || !prev.listed.has(String(v));
+    if (!Array.isArray(value)) {
+      return keep(value) ? value : null;
+    }
+    const kept = value.filter(keep);
     return kept.length ? kept : null;
   };
 

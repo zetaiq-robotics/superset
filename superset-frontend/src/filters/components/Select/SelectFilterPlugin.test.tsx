@@ -2262,19 +2262,54 @@ test('a parent change that leaves no pick clears the child', () => {
   expect(lastValue(setDataMask)).toBeNull();
 });
 
-test('new options with the same parents (a refresh) keep the picks', () => {
+test('new options with the same parents (a new time window) drop picks they no longer list', () => {
   const setDataMask = jest.fn();
   const { rerender } = render(
     <SelectFilterPlugin
-      {...childProps(['sorting-bot'], ['SB-001'], ['SB-001'], setDataMask)}
+      {...childProps(
+        ['sorting-bot'],
+        ['SB-001', 'SB-012'],
+        ['SB-001', 'SB-012'],
+        setDataMask,
+      )}
     />,
   );
   rerender(
     <SelectFilterPlugin
-      {...childProps(['sorting-bot'], ['SB-012'], ['SB-001'], setDataMask)}
+      {...childProps(
+        ['sorting-bot'],
+        ['SB-012'],
+        ['SB-001', 'SB-012'],
+        setDataMask,
+      )}
     />,
   );
-  expect(lastValue(setDataMask)).toEqual(['SB-001']);
+  expect(lastValue(setDataMask)).toEqual(['SB-012']);
+});
+
+test('a value the options never listed (typed into a creatable filter) stays', () => {
+  const setDataMask = jest.fn();
+  const { rerender } = render(
+    <SelectFilterPlugin
+      {...childProps(
+        ['sorting-bot'],
+        ['SB-001'],
+        ['SB-001', 'SB-9*'],
+        setDataMask,
+      )}
+    />,
+  );
+  rerender(
+    <SelectFilterPlugin
+      {...childProps(
+        ['sorting-bot'],
+        ['SB-012'],
+        ['SB-001', 'SB-9*'],
+        setDataMask,
+      )}
+    />,
+  );
+  expect(lastValue(setDataMask)).toEqual(['SB-9*']);
 });
 
 // As in the filter bar: the parents change a render before their options
