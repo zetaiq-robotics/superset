@@ -414,3 +414,139 @@ test('skips data fetch when cascade parent filters have no values selected', () 
 
   expect(mockRequestChartData).not.toHaveBeenCalled();
 });
+
+// ZetaIQ: a dependent filter waits for a pick in every parent.
+const fleetFilter = createMockFilter({
+  id: 'NATIVE_FILTER-FLEET',
+  name: 'Fleet',
+});
+const deviceFilter = createMockFilter({
+  id: 'NATIVE_FILTER-DEVICE',
+  name: 'Device',
+  cascadeParentIds: ['NATIVE_FILTER-FLEET'],
+});
+const fleetAndDevice = {
+  nativeFilters: {
+    filters: {
+      'NATIVE_FILTER-FLEET': fleetFilter,
+      'NATIVE_FILTER-DEVICE': deviceFilter,
+    },
+    filterSets: {},
+  },
+};
+
+test.each([
+  ['no entry', {}],
+  [
+    'no value',
+    { 'NATIVE_FILTER-FLEET': { filterState: {}, extraFormData: {} } },
+  ],
+  [
+    'an empty list',
+    {
+      'NATIVE_FILTER-FLEET': { filterState: { value: [] }, extraFormData: {} },
+    },
+  ],
+  [
+    'a cleared value',
+    {
+      'NATIVE_FILTER-FLEET': {
+        filterState: { value: null },
+        extraFormData: {},
+      },
+    },
+  ],
+])(
+  'with %s in the parent, the child asks for the parent and runs no query',
+  (_, dataMaskSelected) => {
+    mockUseTransitiveParentIds.mockReturnValue(['NATIVE_FILTER-FLEET']);
+    mockUseFilterDependencies.mockReturnValue({});
+
+    renderFilterValue(
+      { filter: deviceFilter, dataMaskSelected },
+      fleetAndDevice,
+    );
+
+    expect(screen.getByTestId('filter-awaiting-parent')).toHaveTextContent(
+      'Choose Fleet first',
+    );
+    expect(screen.queryByTestId('mock-super-chart')).not.toBeInTheDocument();
+    expect(mockRequestChartData).not.toHaveBeenCalled();
+  },
+);
+
+test('a parent left empty clears the pick the child still holds', () => {
+  mockUseTransitiveParentIds.mockReturnValue(['NATIVE_FILTER-FLEET']);
+  mockUseFilterDependencies.mockReturnValue({});
+  const onFilterSelectionChange = jest.fn();
+
+  renderFilterValue(
+    {
+      filter: deviceFilter,
+      onFilterSelectionChange,
+      dataMaskSelected: {
+        'NATIVE_FILTER-DEVICE': {
+          filterState: { value: ['SB-001'] },
+          extraFormData: {},
+        },
+      },
+    },
+    fleetAndDevice,
+  );
+
+  expect(onFilterSelectionChange).toHaveBeenCalledWith(deviceFilter, {
+    extraFormData: {},
+    filterState: { value: null },
+  });
+});
+
+test('a child with nothing picked is not cleared again', () => {
+  mockUseTransitiveParentIds.mockReturnValue(['NATIVE_FILTER-FLEET']);
+  mockUseFilterDependencies.mockReturnValue({});
+  const onFilterSelectionChange = jest.fn();
+
+  renderFilterValue(
+    { filter: deviceFilter, onFilterSelectionChange, dataMaskSelected: {} },
+    fleetAndDevice,
+  );
+
+  expect(onFilterSelectionChange).not.toHaveBeenCalled();
+});
+
+test('once the parent has a pick, the child lists its values', async () => {
+  mockRequestChartData.mockResolvedValue([{ data: [{ country: 'SB-001' }] }]);
+  mockUseTransitiveParentIds.mockReturnValue(['NATIVE_FILTER-FLEET']);
+  const fleetPick = [{ col: 'fleet', op: 'IN', val: ['north'] }];
+  mockUseFilterDependencies.mockReturnValue({ filters: fleetPick });
+
+  renderFilterValue(
+    {
+      filter: deviceFilter,
+      dataMaskSelected: {
+        'NATIVE_FILTER-FLEET': {
+          filterState: { value: ['north'] },
+          extraFormData: { filters: fleetPick },
+        },
+      },
+    },
+    fleetAndDevice,
+  );
+
+  expect(
+    screen.queryByTestId('filter-awaiting-parent'),
+  ).not.toBeInTheDocument();
+  await waitFor(() => expect(mockRequestChartData).toHaveBeenCalled());
+});
+
+test('a filter with no parents never waits', async () => {
+  mockRequestChartData.mockResolvedValue([{ data: [] }]);
+  mockUseTransitiveParentIds.mockReturnValue([]);
+  mockUseFilterDependencies.mockReturnValue({});
+
+  renderFilterValue({ filter: fleetFilter }, fleetAndDevice);
+
+  expect(
+    screen.queryByTestId('filter-awaiting-parent'),
+  ).not.toBeInTheDocument();
+  await waitFor(() => expect(mockRequestChartData).toHaveBeenCalled());
+});
