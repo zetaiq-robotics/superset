@@ -329,24 +329,17 @@ test('typing in the title only dispatches once on commit, not per keystroke', ()
   expect(onChange).toHaveBeenCalledTimes(1);
 });
 
-test('should render the "Draft" status', () => {
-  setup();
-  expect(screen.getByText('Draft')).toBeInTheDocument();
-});
-
-test('should publish', () => {
-  const canEditState = {
+// ZetaIQ: there is no Draft or Published state (save-paths spec §7.2).
+test('shows no Draft or Published badge, even to an editor of an unpublished dashboard', () => {
+  setup({
     dashboardInfo: {
       ...initialState.dashboardInfo,
       dash_edit_perm: true,
       dash_save_perm: true,
     },
-  };
-  setup(canEditState);
-  const draft = screen.getByText('Draft');
-  expect(savePublished).toHaveBeenCalledTimes(0);
-  userEvent.click(draft);
-  expect(savePublished).toHaveBeenCalledTimes(1);
+  });
+  expect(screen.queryByText('Draft')).not.toBeInTheDocument();
+  expect(screen.queryByText('Published')).not.toBeInTheDocument();
 });
 
 test('should render metadata', () => {
@@ -1314,4 +1307,27 @@ test('share URL should use browser-absolute pathname to preserve subdirectory pr
   if (emailLink) {
     expect(emailLink.getAttribute('href')).toMatch(/\/pcs\/dashboard/);
   }
+});
+
+// ZetaIQ: a dashboard not stored yet (save-paths spec §7.3).
+const newDashboardState = {
+  ...editableState,
+  dashboardInfo: { ...editableState.dashboardInfo, id: 0, isNew: true },
+};
+
+test('a new dashboard can be saved at once, and Save asks for a name and a folder', async () => {
+  setup(newDashboardState);
+  const save = screen.getByText('Save').parentElement as HTMLElement;
+  expect(save).toBeEnabled();
+  userEvent.click(save);
+  expect(await screen.findByText('Save dashboard')).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue(
+    'Dashboard Title',
+  );
+});
+
+test('a new dashboard offers no actions menu before its first save', () => {
+  setup(newDashboardState);
+  userEvent.click(screen.getByRole('img', { name: 'ellipsis' }));
+  expect(screen.queryByTestId('header-actions-menu')).not.toBeInTheDocument();
 });

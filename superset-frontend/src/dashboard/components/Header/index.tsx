@@ -62,12 +62,13 @@ import Subject from 'src/types/Subject';
 import { DashboardLayout, RootState } from 'src/dashboard/types';
 import { UserWithPermissionsAndRoles } from 'src/types/bootstrapTypes';
 import { AlertObject } from 'src/features/alerts/types';
-import PublishedStatus from 'src/dashboard/components/PublishedStatus';
+import FirstSaveModal from 'src/dashboard/components/FirstSaveModal';
 import UndoRedoKeyListeners from 'src/dashboard/components/UndoRedoKeyListeners';
 import PropertiesModal from 'src/dashboard/components/PropertiesModal';
 import RefreshIntervalModal from 'src/dashboard/components/RefreshIntervalModal';
 import {
   UNDO_LIMIT,
+  NEW_DASHBOARD_ID,
   SAVE_TYPE_OVERWRITE,
   DASHBOARD_POSITION_DATA_LIMIT,
   DASHBOARD_HEADER_ID,
@@ -460,13 +461,13 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
     boundActionCreators.setEditMode(!editMode);
   }, [boundActionCreators, editMode]);
 
-  const overwriteDashboard = useCallback(() => {
+  const saveData = useCallback(() => {
     const currentColorNamespace =
       dashboardInfo?.metadata?.color_namespace || colorNamespace;
     const currentColorScheme =
       dashboardInfo?.metadata?.color_scheme || colorScheme;
 
-    const data = {
+    return {
       certified_by: dashboardInfo.certified_by,
       certification_details: dashboardInfo.certification_details,
       css: customCss,
@@ -489,6 +490,49 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
           : dashboardInfo.metadata?.refresh_frequency,
       },
     };
+  }, [
+    actualLastModifiedTime,
+    colorNamespace,
+    colorScheme,
+    customCss,
+    dashboardInfo.certification_details,
+    dashboardInfo.certified_by,
+    dashboardInfo.metadata,
+    dashboardInfo.editors,
+    dashboardInfo.tags,
+    dashboardTitle,
+    layout,
+    refreshFrequency,
+    shouldPersistRefreshFrequency,
+    slug,
+    themeId,
+    dashboardInfo.description,
+  ]);
+
+  // Modified by ZetaIQ: a dashboard not stored yet is created by its first Save, which asks for a
+  // name and a folder (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+  const isNew = !!(dashboardInfo as { isNew?: boolean }).isNew;
+  const [showingFirstSave, setShowingFirstSave] = useState(false);
+  const openFirstSave = useCallback(() => setShowingFirstSave(true), []);
+  const createDashboard = useCallback(
+    (name: string, folder: string | null) => {
+      setShowingFirstSave(false);
+      boundActionCreators.onSave(
+        {
+          ...saveData(),
+          dashboard_title: name,
+          zetaPath: folder,
+          uuid: (dashboardInfo as { uuid?: string }).uuid,
+        },
+        NEW_DASHBOARD_ID,
+        SAVE_TYPE_OVERWRITE,
+      );
+    },
+    [boundActionCreators, dashboardInfo, saveData],
+  );
+
+  const overwriteDashboard = useCallback(() => {
+    const data = saveData();
 
     // make sure positions data less than DB storage limitation:
     const positionJSONLength = safeStringify(layout).length;
@@ -513,25 +557,11 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
       boundActionCreators.onSave(data, dashboardInfo.id, SAVE_TYPE_OVERWRITE);
     }
   }, [
-    actualLastModifiedTime,
     boundActionCreators,
-    colorNamespace,
-    colorScheme,
-    customCss,
-    dashboardInfo.certification_details,
-    dashboardInfo.certified_by,
     dashboardInfo.common?.conf?.SUPERSET_DASHBOARD_POSITION_DATA_LIMIT,
     dashboardInfo.id,
-    dashboardInfo.metadata,
-    dashboardInfo.editors,
-    dashboardInfo.tags,
-    dashboardTitle,
     layout,
-    refreshFrequency,
-    shouldPersistRefreshFrequency,
-    slug,
-    themeId,
-    dashboardInfo.description,
+    saveData,
   ]);
 
   const {
@@ -542,7 +572,11 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
   } = useUnsavedChangesPrompt({
     hasUnsavedChanges,
     // deleted while being edited: the leave prompt's Save would 404
-    onSave: liveBadge.gone ? () => {} : overwriteDashboard,
+    onSave: liveBadge.gone
+      ? () => {}
+      : isNew
+        ? openFirstSave
+        : overwriteDashboard,
   });
 
   const showPropertiesModal = useCallback(() => {
@@ -688,30 +722,16 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
           onTogglePause={handlePauseToggle}
         />
       ),
-      !editMode && !isMobile && (
-        <PublishedStatus
-          key="published-status"
-          dashboardId={dashboardInfo.id}
-          isPublished={isPublished}
-          savePublished={boundActionCreators.savePublished}
-          userCanEdit={userCanEdit}
-          userCanSave={userCanSaveAs}
-        />
-      ),
+      // Modified by ZetaIQ: no Draft / Published badge: the state is gone (save-paths spec §7.2).
       !editMode && liveBadge.waiting && <UpdateWaiting key="update-waiting" />,
       !editMode && !isEmbedded && !isMobile && metadataBar,
     ],
     [
-      boundActionCreators.savePublished,
       liveBadge.waiting,
-      dashboardInfo.id,
       editMode,
       isMobile,
       metadataBar,
       isEmbedded,
-      isPublished,
-      userCanEdit,
-      userCanSaveAs,
       handlePauseToggle,
       forceRefresh,
     ],
@@ -809,9 +829,9 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
                   <Button
                     css={saveBtnStyle}
                     buttonSize="small"
-                    disabled={!hasUnsavedChanges}
+                    disabled={!hasUnsavedChanges && !isNew}
                     buttonStyle="primary"
-                    onClick={overwriteDashboard}
+                    onClick={isNew ? openFirstSave : overwriteDashboard}
                     data-test="header-save-button"
                     aria-label={t('Save')}
                   >
@@ -858,6 +878,8 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
       isEmbedded,
       isMobile,
       liveBadge,
+      isNew,
+      openFirstSave,
       overwriteDashboard,
       redoLength,
       undoLength,
@@ -940,7 +962,7 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
         menuDropdownProps={{
           open: isDropdownVisible,
           onOpenChange: setIsDropdownVisible,
-          disabled: isVersionPreviewActive,
+          disabled: isVersionPreviewActive || isNew,
         }}
         additionalActionsMenu={menu}
         showFaveStar={!!(user?.userId && dashboardInfo?.id && !isMobile)}
@@ -998,6 +1020,16 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
 
       <OverwriteConfirm />
       <DashboardStaleSave />
+
+      {showingFirstSave && (
+        <FirstSaveModal
+          show
+          title={dashboardTitle}
+          folder={new URLSearchParams(window.location.search).get('folder')}
+          onHide={() => setShowingFirstSave(false)}
+          onSave={createDashboard}
+        />
+      )}
 
       {userCanCurate && (
         <DashboardEmbedModal

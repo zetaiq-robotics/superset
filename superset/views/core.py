@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: /superset/dashboard/new/ opens a dashboard not stored yet.
 # pylint: disable=invalid-name
 from __future__ import annotations
 
@@ -119,6 +120,10 @@ SqlResults = dict[str, Any]
 LANGUAGE_CODE_RE: re.Pattern[str] = re.compile(
     r"^[a-z]{2,3}(_[A-Z]{2}|_[A-Z][a-z]{3})?$"
 )
+
+
+# ZetaIQ: the page URL of a dashboard not stored yet; no dashboard may take it as its slug.
+NEW_DASHBOARD = "new"
 
 
 class Superset(BaseSupersetView):
@@ -588,6 +593,20 @@ class Superset(BaseSupersetView):
         :param add_extra_log_payload: added by `log_this_with_manual_updates`, set a
             default value to appease pylint
         """
+
+        if dashboard_id_or_slug == NEW_DASHBOARD:
+            # ZetaIQ: a new dashboard is built in the page and stored only by its first Save, which
+            # creates it with its folder (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+            if not security_manager.can_access("can_write", "Dashboard"):
+                abort(404)
+            return self.render_app_template(
+                extra_bootstrap_data={
+                    "user": bootstrap_user_data(g.user, include_perms=True),
+                    "common": common_bootstrap_payload(),
+                },
+                title=__("New dashboard"),
+                standalone_mode=False,
+            )
 
         dashboard = Dashboard.get(dashboard_id_or_slug)
 

@@ -501,6 +501,9 @@ function SliceAdder({
               newWindow: true,
             })
           }
+          // Modified by ZetaIQ: a dashboard not stored yet has no id for the new chart to land on.
+          disabled={!dashboardId}
+          title={dashboardId ? undefined : t('Save the dashboard first')}
         >
           {t('Create new chart')}
         </NewChartButton>

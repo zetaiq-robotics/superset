@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Modified by ZetaIQ: the slug "new" is reserved for a dashboard not stored yet.
 from __future__ import annotations
 
 import logging
@@ -350,6 +351,8 @@ class DashboardDAO(BaseDAO[Dashboard]):
         # at the application layer (colliding only at flush via the partial index).
         if slug is None:
             return True
+        if slug == "new":  # ZetaIQ: the URL of a dashboard not stored yet (views/core.py NEW_DASHBOARD)
+            return False
         dashboard_query = db.session.query(Dashboard).filter(Dashboard.slug == slug)
         return not db.session.query(dashboard_query.exists()).scalar()
 
@@ -359,6 +362,8 @@ class DashboardDAO(BaseDAO[Dashboard]):
         # the partial-index dialects (Postgres / MySQL 8.0+) match this
         # application-level check; the full-constraint dialects can still
         # surface an IntegrityError when the colliding row is soft-deleted.
+        if slug == "new":  # ZetaIQ: the URL of a dashboard not stored yet (views/core.py NEW_DASHBOARD)
+            return False
         if slug is not None:
             dashboard_query = db.session.query(Dashboard).filter(
                 Dashboard.slug == slug, Dashboard.id != dashboard_id

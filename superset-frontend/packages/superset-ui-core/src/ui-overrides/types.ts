@@ -273,6 +273,23 @@ export interface DashboardSlicesFolderProps {
   chartIds: number[];
 }
 
+// Modified by ZetaIQ: the folder field of a dashboard's first Save and of "Save as".
+export interface DashboardSaveFolderProps {
+  /** "new": a dashboard not stored yet; "saveas": a copy of a stored one. */
+  mode: 'new' | 'saveas';
+  /** The folder to start at: the one the page was opened in, if any. */
+  sourcePath: string | null;
+  /** "saveas": the dashboard being copied (the field starts at its folder). */
+  dashboardId?: number;
+  /** Called on every change; Save waits for `valid`. */
+  onChange(path: string | null, valid: boolean): void;
+}
+
+// Modified by ZetaIQ: the folder of everything a dashboard or chart import creates.
+export interface ImportFolderProps {
+  onChange(path: string | null, valid: boolean): void;
+}
+
 // Modified by ZetaIQ: a field in Explore's save dialog that files the saved chart.
 export interface ExploreSaveFolderProps {
   /** The chart open in Explore; null for a new chart. */
@@ -282,12 +299,18 @@ export interface ExploreSaveFolderProps {
   sourceChartId: number | null;
   /** The existing dashboard chosen in the dialog, if any. */
   dashboardIds: number[];
+  /** The name of a new dashboard being created with the chart, if any. */
+  newDashboardName: string | null;
   /**
-   * Registers the function the dialog awaits with the saved chart's id once
-   * the save succeeded, before it navigates. The latest one registered is
-   * used; a rejection never undoes or blocks the save.
+   * Called on every change: the folder for a chart the save creates, the folder for a new dashboard,
+   * and whether both are valid. Save waits for `valid`; the folders travel as X-Zeta-Path
+   * (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.4).
    */
-  onReady(file: (savedChartId: number) => Promise<void>): void;
+  onChange(value: {
+    chart: string | null;
+    dashboard: string | null;
+    valid: boolean;
+  }): void;
 }
 
 export type Extensions = Partial<{
@@ -335,6 +358,10 @@ export type Extensions = Partial<{
   'filter.dateFilterControl': ComponentType<DateFilterControlProps>;
   'explore.chart.header': ComponentType<ExploreChartHeaderProps>;
   'explore.datasource.panel': ComponentType<ExploreDatasourcePanelProps>;
+  // Modified by ZetaIQ: the folder of a dashboard or chart import.
+  'import.folder': ComponentType<ImportFolderProps>;
+  // Modified by ZetaIQ: the folder of a dashboard's first Save and of "Save as".
+  'dashboard.save.folder': ComponentType<DashboardSaveFolderProps>;
   // Modified by ZetaIQ: a field in the save dialog body (a folder for the chart).
   'explore.save.folder': ComponentType<ExploreSaveFolderProps>;
   // Modified by ZetaIQ: true drops the datasource column for this chart. Called on
