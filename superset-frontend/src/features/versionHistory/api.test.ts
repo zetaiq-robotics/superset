@@ -243,3 +243,24 @@ test('fetchDashboardHydrationData carries the version the dashboard is served at
   const { dashboard } = await fetchDashboardHydrationData(5);
   expect((dashboard as { etag?: string }).etag).toBe('W/"v9:a:zstd"');
 });
+
+// ZetaIQ: a chart made from a version lands in its source chart's folder (save-paths final review I2).
+test('createChartFromSnapshot names its source chart for the folder', async () => {
+  fetchMock.post('glob:*/api/v1/chart/', { id: 77 }, { name: 'chart-post' });
+  const chartSnapshot = {
+    slice_name: 'Sales',
+    params: '{}',
+    viz_type: 'table',
+    query_context: null,
+    description: null,
+    cache_timeout: null,
+    datasource_id: 3,
+    datasource_type: 'table',
+    uuid: 'c0ffee00-0000-4000-8000-000000000005',
+  } as unknown as ChartVersionSnapshot;
+  await createChartFromSnapshot(chartSnapshot, 'Sales (copy)');
+  const [call] = fetchMock.callHistory.calls('chart-post');
+  expect(
+    new Headers(call.options.headers as HeadersInit).get('X-Zeta-Path-Of'),
+  ).toBe('chart:c0ffee00-0000-4000-8000-000000000005');
+});

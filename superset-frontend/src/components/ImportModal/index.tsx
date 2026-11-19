@@ -16,7 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { FunctionComponent, useEffect, useState, ChangeEvent } from 'react';
+import {
+  FunctionComponent,
+  useCallback,
+  useEffect,
+  useState,
+  ChangeEvent,
+} from 'react';
+import { getExtensionsRegistry } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
 import { styled, css } from '@apache-superset/core/theme';
 import { useImportResource } from 'src/views/CRUD/hooks';
@@ -186,6 +193,20 @@ export const ImportModal: FunctionComponent<ImportModelsModalProps> = ({
     clearModal();
   };
 
+  // Modified by ZetaIQ: imported dashboards and charts land in one folder, picked through the
+  // `import.folder` extension (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.4).
+  const Folder =
+    resourceName === 'dashboard' || resourceName === 'chart'
+      ? getExtensionsRegistry().get('import.folder')
+      : undefined;
+  const [folder, setFolder] = useState<{ path: string | null; valid: boolean }>(
+    { path: null, valid: false },
+  );
+  const onFolderChange = useCallback(
+    (path: string | null, valid: boolean) => setFolder({ path, valid }),
+    [],
+  );
+
   const onUpload = () => {
     if (!(fileList[0]?.originFileObj instanceof File)) {
       return;
@@ -201,6 +222,7 @@ export const ImportModal: FunctionComponent<ImportModelsModalProps> = ({
       encryptedExtraSecrets,
       confirmedOverwrite,
       overwriteAll,
+      Folder ? folder.path : null,
     ).then(result => {
       if (result) {
         clearModal();
@@ -415,6 +437,7 @@ export const ImportModal: FunctionComponent<ImportModelsModalProps> = ({
       className="import-model-modal"
       disablePrimaryButton={
         fileList.length === 0 ||
+        (!!Folder && !folder.valid) ||
         (needsOverwriteConfirm && !confirmedOverwrite) ||
         importingModel
       }
@@ -442,6 +465,7 @@ export const ImportModal: FunctionComponent<ImportModelsModalProps> = ({
           <Button loading={importingModel}>{t('Select file')}</Button>
         </Upload>
       </StyledContainer>
+      {Folder && <Folder onChange={onFolderChange} />}
       {errorMessage && (
         <ImportErrorAlert
           errorMessage={errorMessage}

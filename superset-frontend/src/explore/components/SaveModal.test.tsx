@@ -965,16 +965,23 @@ test('addChartToDashboard handles empty position_json', async () => {
   }
 });
 
-// ZetaIQ: the `explore.save.folder` extension renders in the dialog and files the saved chart.
-const registerSaveFolder = (file?: (savedChartId: number) => Promise<void>) => {
+// ZetaIQ: the `explore.save.folder` extension renders in the dialog and picks the folders the save
+// creates things in (save-paths spec §7.4).
+const registerSaveFolder = (
+  value: { chart: string | null; dashboard: string | null; valid: boolean } = {
+    chart: 'Plant A',
+    dashboard: null,
+    valid: true,
+  },
+) => {
   sessionStorage.clear();
   const seen: ExploreSaveFolderProps[] = [];
   getExtensionsRegistry().set('explore.save.folder', props => {
     seen.push(props);
-    const { onReady } = props;
+    const { onChange } = props;
     useEffect(() => {
-      if (file) onReady(file);
-    }, [onReady]);
+      onChange(value);
+    }, [onChange]);
     return <div data-test="save-folder-slot" />;
   });
   return seen;
@@ -1086,30 +1093,104 @@ test('a new chart passes no chart ids to the explore.save.folder extension', () 
   );
 });
 
-test('the saved chart is filed through the extension before the dialog closes', async () => {
+test('a new chart is created in the folder the extension picked', async () => {
   const store = tableStore();
-  let hiddenWhenFiled: boolean | undefined;
-  const file = jest.fn(async () => {
-    hiddenWhenFiled = hidden(store);
-  });
-  registerSaveFolder(file);
+  registerSaveFolder();
   const createSlice = saveAsNewChart(store);
-
   await waitFor(() => expect(hidden(store)).toBe(true));
-  expect(createSlice).toHaveBeenCalled();
-  expect(file).toHaveBeenCalledTimes(1);
-  expect(file).toHaveBeenCalledWith(42);
-  expect(hiddenWhenFiled).toBe(false);
+  expect(createSlice).toHaveBeenCalledWith('Copy', [], null, 'Plant A');
 });
 
-test('a failed filing still completes the save and closes the dialog', async () => {
-  const store = tableStore();
-  const file = jest.fn().mockRejectedValue(new Error('403'));
-  registerSaveFolder(file);
-  saveAsNewChart(store);
+test('Save waits for the extension to report a valid folder', () => {
+  registerSaveFolder({ chart: null, dashboard: null, valid: false });
+  const { getByRole } = setup();
+  fireEvent.click(getByRole('radio', { name: 'Save as...' }));
+  expect(getByRole('button', { name: 'Save' })).toBeDisabled();
+});
 
-  await waitFor(() => expect(hidden(store)).toBe(true));
-  expect(file).toHaveBeenCalledWith(42);
+// Review Focus 4: overwriting a chart while adding it to a new dashboard folders only the dashboard.
+test('overwrite with a new dashboard sends the header only on the dashboard', async () => {
+  const store = mockStore({
+    ...initialState,
+    explore: {
+      ...initialState.explore,
+      datasource: { type: 'table' },
+      slice: {
+        ...initialState.explore.slice,
+        editors: [{ id: 1 }],
+        owners: [{ id: 1 }],
+      },
+    },
+    user: { userId: 1 },
+  });
+  registerSaveFolder({ chart: 'Plant A', dashboard: 'Dash F', valid: true });
+  const createDashboard = jest.fn().mockResolvedValue({ id: 9 });
+  const updateSlice = jest.fn().mockResolvedValue({ id: 1 });
+  fetchMock.get('glob:*/api/v1/dashboard/9', {
+    result: { id: 9, dashboard_title: 'New dashboard', owners: [] },
+  });
+  const utils = setup(
+    {
+      ...defaultProps,
+      actions: {
+        ...defaultProps.actions,
+        setFormData: jest.fn(),
+        createDashboard,
+        updateSlice,
+        getSliceDashboards: jest.fn().mockResolvedValue([]),
+      },
+    },
+    store,
+  );
+  fireEvent.click(utils.getByRole('radio', { name: 'Save (Overwrite)' }));
+  fireEvent.change(utils.getByTestId('new-chart-name'), {
+    target: { value: 'Overwritten' },
+  });
+  fireEvent.change(utils.getByTestId('mock-async-select'), {
+    target: { value: 'New dashboard' },
+  });
+  expect(utils.getByRole('radio', { name: 'Save (Overwrite)' })).toBeChecked();
+  expect(utils.getByRole('button', { name: 'Save' })).toBeEnabled();
+  fireEvent.click(utils.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(createDashboard).toHaveBeenCalled());
+  await waitFor(() => expect(updateSlice).toHaveBeenCalled());
+  expect(createDashboard).toHaveBeenCalledWith(expect.anything(), 'Dash F');
+  expect(updateSlice.mock.calls[0]).toHaveLength(4); // no folder for an overwrite
+});
+
+test('a chart that fails after its new dashboard was created removes that empty dashboard', async () => {
+  const store = tableStore();
+  registerSaveFolder({ chart: 'Plant A', dashboard: 'Dash F', valid: true });
+  const del = jest
+    .spyOn(SupersetClient, 'delete')
+    .mockResolvedValue({} as any);
+  fetchMock.get('glob:*/api/v1/dashboard/9', {
+    result: { id: 9, dashboard_title: 'New dashboard', owners: [] },
+  });
+  const utils = setup(
+    {
+      ...defaultProps,
+      actions: {
+        ...defaultProps.actions,
+        setFormData: jest.fn(),
+        createDashboard: jest.fn().mockResolvedValue({ id: 9 }),
+        createSlice: jest.fn().mockRejectedValue(new Error('400')),
+      },
+    },
+    store,
+  );
+  fireEvent.click(utils.getByRole('radio', { name: 'Save as...' }));
+  fireEvent.change(utils.getByTestId('new-chart-name'), {
+    target: { value: 'Copy' },
+  });
+  fireEvent.change(utils.getByTestId('mock-async-select'), {
+    target: { value: 'New dashboard' },
+  });
+  fireEvent.click(utils.getByRole('button', { name: 'Save' }));
+  await waitFor(() =>
+    expect(del).toHaveBeenCalledWith({ endpoint: '/api/v1/dashboard/9' }),
+  );
+  del.mockRestore();
 });
 
 test('no folder field without the explore.save.folder extension', () => {

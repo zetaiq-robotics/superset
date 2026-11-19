@@ -17,7 +17,7 @@
  * under the License.
  *
  * Modified by ZetaIQ: a chart opened from a dashboard is saved to that dashboard only;
- * an `explore.save.folder` extension renders in the dialog and files the saved chart.
+ * an `explore.save.folder` extension picks the folders the save creates things in.
  * Modified by ZetaIQ: an overwrite sends If-Match and a 412 offers a copy or Overwrite;
  * adding to a dashboard retries once on a 412.
  */
@@ -29,7 +29,6 @@ import {
   useEffect,
   useCallback,
   useMemo,
-  useRef,
 } from 'react';
 import { Dispatch } from 'redux';
 import { nanoid } from 'nanoid';
@@ -295,15 +294,21 @@ const SaveModal = ({
     [dashboard?.value],
   );
 
-  // ZetaIQ: the folder extension registers how to file the saved chart.
+  // ZetaIQ: the folder extension picks the folders the save creates things in (save-paths spec §7.4).
   const SaveFolderExtension = getExtensionsRegistry().get(
     'explore.save.folder',
   );
-  const fileChartRef = useRef<(savedChartId: number) => Promise<void>>();
-  const onFolderReady = useCallback(
-    (file: (savedChartId: number) => Promise<void>) => {
-      fileChartRef.current = file;
-    },
+  const [folder, setFolder] = useState<{
+    chart: string | null;
+    dashboard: string | null;
+    valid: boolean;
+  }>({ chart: null, dashboard: null, valid: !SaveFolderExtension });
+  const onFolderChange = useCallback(
+    (value: {
+      chart: string | null;
+      dashboard: string | null;
+      valid: boolean;
+    }) => setFolder(value),
     [],
   );
   const chosenDashboardId = dashboard?.value;
@@ -572,13 +577,17 @@ const SaveModal = ({
 
         let dashboardResult: DashboardGetResponse | null = null;
         let selectedTabId: string | undefined;
+        let createdDashboardId: number | undefined;
         if (dashboard) {
           let validId = dashboard.value;
           if (isNewDashboard()) {
-            const response = await actions.createDashboard(dashboard.label);
+            const response = await (SaveFolderExtension
+              ? actions.createDashboard(dashboard.label, folder.dashboard)
+              : actions.createDashboard(dashboard.label));
             validId = response.id;
             // it exists now: a retry (after a refused overwrite) reuses it
             setDashboard({ label: dashboard.label, value: validId });
+            createdDashboardId = response.id;
           }
 
           try {
@@ -618,16 +627,40 @@ const SaveModal = ({
               : null,
           );
         } else {
-          value = await actions.createSlice(
-            newSliceName,
-            sliceDashboards,
-            dashboardResult
-              ? {
-                  title: dashboardResult.dashboard_title,
-                  new: isNewDashboard(),
-                }
-              : null,
-          );
+          const addedTo = dashboardResult
+            ? {
+                title: dashboardResult.dashboard_title,
+                new: isNewDashboard(),
+              }
+            : null;
+          try {
+            value = await (SaveFolderExtension
+              ? actions.createSlice(
+                  newSliceName,
+                  sliceDashboards,
+                  addedTo,
+                  folder.chart,
+                )
+              : actions.createSlice(newSliceName, sliceDashboards, addedTo));
+          } catch (error) {
+            // ZetaIQ: the empty dashboard made for this chart a moment ago must not stay behind.
+            if (createdDashboardId) {
+              // gone again: a retry creates a new one
+              setDashboard({ label: dashboard.label, value: dashboard.label });
+              await SupersetClient.delete({
+                endpoint: `/api/v1/dashboard/${createdDashboardId}`,
+              }).catch(() =>
+                addDangerToast(
+                  t(
+                    'The new dashboard "%s" was left empty in its folder',
+                    dashboard?.label,
+                  ),
+                ),
+              );
+            }
+            // createSlice already reported the failure (saveSliceFailed); the dialog stays open.
+            return;
+          }
           if (dashboardResult && selectedTabId) {
             try {
               await addChartToDashboardTab(
@@ -644,15 +677,6 @@ const SaveModal = ({
                 ),
               );
             }
-          }
-        }
-
-        // ZetaIQ: the chart is saved; filing it is best effort and never undoes the save.
-        if (fileChartRef.current) {
-          try {
-            await fileChartRef.current(value.id);
-          } catch (error) {
-            logging.warn('Filing the saved chart failed:', error);
           }
         }
 
@@ -711,6 +735,8 @@ const SaveModal = ({
       newSliceName,
       addChartToDashboardTab,
       addDangerToast,
+      SaveFolderExtension,
+      folder,
       history,
       onHide,
     ],
@@ -960,7 +986,8 @@ const SaveModal = ({
             action === ChartStatusType.saveas ? (slice?.slice_id ?? null) : null
           }
           dashboardIds={chosenDashboardIds}
-          onReady={onFolderReady}
+          newDashboardName={isNewDashboard() ? (dashboard?.label ?? null) : null}
+          onChange={onFolderChange}
         />
       )}
       {info && <Alert type="info" message={info} closable={false} />}
@@ -992,6 +1019,7 @@ const SaveModal = ({
           isLoading ||
           !newSliceName ||
           !dashboard ||
+          !folder.valid ||
           (datasource?.type !== DatasourceType.Table && !datasetName)
         }
         onClick={() => saveOrOverwrite(true)}
@@ -1006,6 +1034,7 @@ const SaveModal = ({
         disabled={
           isLoading ||
           !newSliceName ||
+          !folder.valid ||
           (datasource?.type !== DatasourceType.Table && !datasetName)
         }
         data-test="btn-modal-save"

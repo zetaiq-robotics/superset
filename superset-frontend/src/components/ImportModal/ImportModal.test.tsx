@@ -20,6 +20,7 @@ import thunk from 'redux-thunk';
 import configureStore from 'redux-mock-store';
 import { fireEvent, render, waitFor } from 'spec/helpers/testing-library';
 import fetchMock from 'fetch-mock';
+import { getExtensionsRegistry } from '@superset-ui/core';
 import { ImportResourceName } from 'src/views/CRUD/types';
 import type { ImportModelsModalProps } from './types';
 import { ImportModal } from '.';
@@ -183,4 +184,46 @@ test('should render multiple encrypted extra secret fields for multiple files', 
     ],
   });
   expect(getAllByTestId('encrypted_extra_secret')).toHaveLength(3);
+});
+
+// ZetaIQ: imported dashboards and charts land in one folder (save-paths spec §7.4).
+const DASHBOARD_IMPORT_URL = 'glob:*/api/v1/dashboard/import/';
+fetchMock.post(DASHBOARD_IMPORT_URL, { result: 'OK' });
+
+test('a dashboard import waits for a folder and sends it as X-Zeta-Path', async () => {
+  getExtensionsRegistry().set('import.folder', ({ onChange }) => (
+    <button type="button" onClick={() => onChange('Imported/Plant A', true)}>
+      pick folder
+    </button>
+  ));
+  const file = new File([new ArrayBuffer(1)], 'dashboard_export.zip');
+  const { getByTestId, getByRole, getByText } = setup({
+    resourceName: 'dashboard' as ImportResourceName,
+    resourceLabel: 'dashboard',
+  });
+  await waitFor(() =>
+    fireEvent.change(getByTestId('model-file-input'), {
+      target: { files: [file] },
+    }),
+  );
+  expect(getByRole('button', { name: 'Import' })).toBeDisabled();
+  fireEvent.click(getByText('pick folder'));
+  expect(getByRole('button', { name: 'Import' })).toBeEnabled();
+  fireEvent.click(getByRole('button', { name: 'Import' }));
+  await waitFor(() =>
+    expect(fetchMock.callHistory.calls(DASHBOARD_IMPORT_URL)).toHaveLength(1),
+  );
+  const headers = new Headers(
+    fetchMock.callHistory.calls(DASHBOARD_IMPORT_URL)[0].options
+      ?.headers as HeadersInit,
+  );
+  expect(headers.get('x-zeta-path')).toBe('Imported%2FPlant%20A');
+  getExtensionsRegistry().set('import.folder', undefined);
+});
+
+test('a database import asks for no folder', () => {
+  getExtensionsRegistry().set('import.folder', () => <span>folder field</span>);
+  const { queryByText } = setup();
+  expect(queryByText('folder field')).not.toBeInTheDocument();
+  getExtensionsRegistry().set('import.folder', undefined);
 });

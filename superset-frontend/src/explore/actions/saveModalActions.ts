@@ -375,6 +375,8 @@ export const createSlice =
       title: string;
       new?: boolean;
     },
+    // Modified by ZetaIQ: the folder the new chart is created in (save-paths spec §7.4).
+    zetaPath?: string | null,
   ) =>
   async (
     dispatch: Dispatch,
@@ -398,6 +400,7 @@ export const createSlice =
     try {
       const response = await SupersetClient.post({
         endpoint: `/api/v1/chart/`,
+        headers: folderHeader(zetaPath),
         jsonPayload: await getSlicePayload(
           sliceName,
           formData,
@@ -416,11 +419,17 @@ export const createSlice =
     }
   };
 
+// Modified by ZetaIQ: a folder travels as X-Zeta-Path (save-paths spec §7.4).
+const folderHeader = (zetaPath?: string | null) =>
+  zetaPath ? { 'X-Zeta-Path': encodeURIComponent(zetaPath) } : undefined;
+
 export const createDashboard =
-  (dashboardName: string) => async (dispatch: Dispatch) => {
+  (dashboardName: string, zetaPath?: string | null) =>
+  async (dispatch: Dispatch) => {
     try {
       const response = await SupersetClient.post({
         endpoint: `/api/v1/dashboard/`,
+        headers: folderHeader(zetaPath),
         jsonPayload: { dashboard_title: dashboardName },
       });
 

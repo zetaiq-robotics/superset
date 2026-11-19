@@ -621,6 +621,8 @@ export function useImportResource(
       encryptedExtraSecrets: Record<string, Record<string, string>> = {},
       overwrite = false,
       overwriteAll = false,
+      // Modified by ZetaIQ: the folder everything imported is filed in (save-paths spec §7.4).
+      zetaPath?: string | null,
     ) => {
       // Set loading state
       updateState({
@@ -693,7 +695,10 @@ export function useImportResource(
       return SupersetClient.post({
         endpoint: `/api/v1/${resourceName}/import/`,
         body: formData,
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(zetaPath && { 'X-Zeta-Path': encodeURIComponent(zetaPath) }),
+        },
       })
         .then(() => {
           updateState({
