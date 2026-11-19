@@ -846,23 +846,6 @@ const refreshGone = () =>
       },
   );
 
-test('an unpublish that 404s shows no "Dashboard updated" toast, only the unavailable view', async () => {
-  const { store } = setup();
-  refreshGone();
-  event('unpublished', { etag: 'v2', version: 2 });
-  expect(toasts(store)).toEqual([]);
-  await advance(1);
-  await advance(1);
-  expect(refresh).toHaveBeenCalledTimes(1);
-  expect(refresh.mock.calls[0][1].reason).toBe('unpublished');
-  expect(state(store).dashboardState).toMatchObject({
-    unavailable: true,
-    unavailableReason: 'unpublished',
-  });
-  await advance(60_000);
-  expect(toasts(store)).toEqual([]);
-});
-
 test('an access change that 404s carries reason access; others none', async () => {
   const { store } = setup();
   refreshGone();
@@ -890,7 +873,7 @@ test('a deferred refresh that 404s adds no second toast', async () => {
   refreshGone();
   document.body.innerHTML =
     '<button class="filter-bar__apply-button">Apply filters</button>';
-  event('unpublished', { etag: 'v2', version: 2 });
+  changed('v2', 2, 0);
   expect(toasts(store)).toEqual([
     "Dashboard updated. It will refresh when you're done.",
   ]);
@@ -952,39 +935,4 @@ test('"Update waiting" goes when the dashboard is deleted', async () => {
   expect(hook.result.current.waiting).toBe(true);
   event('deleted');
   expect(hook.result.current.waiting).toBe(false);
-});
-
-test('an unpublish while editing prompts like a save, then counts on the badge', async () => {
-  const { hook, store } = setup(EDITING);
-  event('unpublished', { etag: 'v2', version: 2 });
-  await act(async () => {});
-  // a new version: "Dashboard changed", with who and when
-  expect(hook.result.current.prompt).toBe(true);
-  expect(hook.result.current.badgeCount).toBe(1);
-  expect(hook.result.current.chartOnly).toBe(false);
-  expect(hook.result.current.summary?.changedBy).toBe('Priya');
-  expect(state(store).dashboardInfo.versions).toEqual({
-    base: 'v1',
-    latest: 'v2',
-  });
-
-  // Keep editing, then another unpublish (after a re-publish): badge +1
-  act(() => hook.result.current.dismissPrompt());
-  event('unpublished', { etag: 'v3', version: 3 });
-  await act(async () => {});
-  expect(hook.result.current.prompt).toBe(false);
-  expect(hook.result.current.badgeCount).toBe(2);
-  await advance(60_000);
-  expect(refresh).not.toHaveBeenCalled();
-});
-
-test('the same unpublished event twice refreshes once', async () => {
-  setup();
-  mockLive = 'v2';
-  event('unpublished', { etag: 'v2', version: 2 });
-  await advance(1);
-  await advance(1);
-  event('unpublished', { etag: 'v2', version: 2 });
-  await advance(60_000);
-  expect(refresh).toHaveBeenCalledTimes(1);
 });

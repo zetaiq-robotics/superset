@@ -1206,7 +1206,7 @@ export function setFullSizeChartId(
 }
 
 /**
- * A live refresh got 404: deleted, unpublished or no longer shared. `reason`
+ * A live refresh got 404: deleted or no longer shared. `reason`
  * is the event's that led to it, when known.
  */
 export const DASHBOARD_UNAVAILABLE = 'DASHBOARD_UNAVAILABLE';

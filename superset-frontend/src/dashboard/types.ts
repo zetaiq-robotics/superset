@@ -126,7 +126,7 @@ export type DashboardState = {
   directPathToChild: string[];
   activeTabs: ActiveTabs;
   fullSizeChartId: number | null;
-  /** a live refresh found the dashboard deleted, unpublished or unshared */
+  /** a live refresh found the dashboard deleted or unshared */
   unavailable?: boolean;
   /** why it went away, when known (spec §7.7) */
   unavailableReason?: UnavailableReason;

@@ -605,7 +605,7 @@ test('renders a not-found state instead of throwing when the dashboard 404s', as
 });
 
 test('unavailable view on 404', async () => {
-  // a live refresh answered 404: deleted, unpublished or no longer shared
+  // a live refresh answered 404: deleted or no longer shared
   render(
     <Suspense fallback="loading">
       <DashboardPage idOrSlug="1" />
@@ -642,7 +642,7 @@ test('the unavailable view says why, and leads back to the list', async () => {
         dashboardState: {
           sliceIds: [],
           unavailable: true,
-          unavailableReason: 'unpublished',
+          unavailableReason: 'access',
         },
         nativeFilters: { filters: {} },
         dataMask: {},
@@ -651,7 +651,7 @@ test('the unavailable view says why, and leads back to the list', async () => {
   );
 
   expect(
-    await screen.findByText('This dashboard was moved back to draft.'),
+    await screen.findByText('You no longer have access to this dashboard.'),
   ).toBeInTheDocument();
   await userEvent.click(
     screen.getByRole('button', { name: 'Back to dashboards' }),

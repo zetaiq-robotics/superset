@@ -131,32 +131,3 @@ test('catch-up refreshes only when the version or the chart digest moved', () =>
   expect(catchUp('"v2:acc"', false)).toBe('refresh');
   expect(catchUp('"v1:acc"', true)).toBe('refresh');
 });
-
-test('unpublished refreshes; an editor with unsaved changes is told like a save', () => {
-  const ev = changed({ reason: 'unpublished' });
-  expect(classifyEvent(ev, view())).toBe('refresh');
-  // a new version: the editor's base is stale
-  const editing = { editMode: true, hasUnsavedChanges: true };
-  expect(classifyEvent(ev, view(editing))).toBe('prompt');
-  expect(classifyEvent(ev, view({ ...editing, promptedBase: 'v1' }))).toBe(
-    'badge',
-  );
-  // it moves the version: the tab's own unpublish is already seen
-  expect(
-    classifyEvent(ev, view({ versions: { base: 'v2', latest: 'v2' } })),
-  ).toBe('ignore');
-});
-
-test('a duplicate or older unpublished event is ignored', () => {
-  const ev = changed({ reason: 'unpublished' });
-  // heard once already (version 2 seen, v2 noted as latest)
-  const heard = view({ versions: { base: 'v1', latest: 'v2' }, maxVersion: 2 });
-  expect(classifyEvent(ev, heard)).toBe('ignore');
-  // a newer dashboard save was already seen: never backwards
-  expect(
-    classifyEvent(
-      changed({ reason: 'unpublished', etag: 'v9', version: 2 }),
-      view({ maxVersion: 3 }),
-    ),
-  ).toBe('ignore');
-});

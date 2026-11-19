@@ -29,11 +29,6 @@ const copy = (reason?: UnavailableReason) => {
         t('This dashboard was deleted.'),
         t('Someone who manages it can restore it from the archive.'),
       ];
-    case 'unpublished':
-      return [
-        t('This dashboard was moved back to draft.'),
-        t('Only its editors can see it until it is published again.'),
-      ];
     case 'access':
       return [
         t('You no longer have access to this dashboard.'),
@@ -42,15 +37,13 @@ const copy = (reason?: UnavailableReason) => {
     default:
       return [
         t('This dashboard is no longer available to you.'),
-        t(
-          'It may have been deleted, moved to draft, or no longer shared with you.',
-        ),
+        t('It may have been deleted or no longer shared with you.'),
       ];
   }
 };
 
 /**
- * The open dashboard was deleted, unpublished or unshared (spec §7.7):
+ * The open dashboard was deleted or unshared (spec §7.7):
  * why, when known, and the way back to the list.
  */
 export default function DashboardUnavailable({

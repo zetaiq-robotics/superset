@@ -400,9 +400,8 @@ export function useDashboardLive(dashboardUuid: string) {
           chartOnly: true,
         };
       if (ev.reason !== 'access') pending.saved = true;
-      // a 404 after an unpublish or an access change: most likely why
-      if (ev.reason === 'unpublished') pending.reason = 'unpublished';
-      else if (ev.reason === 'access') pending.reason ??= 'access';
+      // a 404 after an access change: most likely why
+      if (ev.reason === 'access') pending.reason = 'access';
       pending.chartOnly = pending.chartOnly && chart;
       pending.charts.push(...(ev.charts ?? []).map(c => c.id));
       // the newest dashboard version, unless any other reason is waiting
@@ -432,7 +431,7 @@ export function useDashboardLive(dashboardUuid: string) {
         promptedBase,
       });
       if (
-        (ev.reason === 'dashboard' || ev.reason === 'unpublished') &&
+        ev.reason === 'dashboard' &&
         ev.version != null &&
         (maxVersion === null || ev.version > maxVersion)
       )
@@ -446,9 +445,7 @@ export function useDashboardLive(dashboardUuid: string) {
         (ev.reason === 'catch-up' &&
           (v === null || v === versions.base || v === versions.latest));
       if (
-        (ev.reason === 'dashboard' ||
-          ev.reason === 'unpublished' ||
-          ev.reason === 'catch-up') &&
+        (ev.reason === 'dashboard' || ev.reason === 'catch-up') &&
         v &&
         v !== versions.base &&
         v !== versions.latest
