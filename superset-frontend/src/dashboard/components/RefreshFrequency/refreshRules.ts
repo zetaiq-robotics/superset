@@ -47,7 +47,7 @@ const limitSeconds = (v: unknown): number => {
   return n >= 1000 && n % 1000 === 0 ? n / 1000 : n;
 };
 
-const ALWAYS = () => ({ allowed: true });
+const ALWAYS = (): { allowed: boolean; reason?: string } => ({ allowed: true });
 
 export function useRefreshRules(): RefreshRules {
   const policy =
