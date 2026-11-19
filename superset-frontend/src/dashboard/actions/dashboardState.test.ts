@@ -51,6 +51,7 @@ import { setFilterConfiguration } from 'src/dashboard/actions/nativeFilters';
 import { saveChartCustomization } from 'src/dashboard/actions/chartCustomizationActions';
 import dashboardInfoReducer from 'src/dashboard/reducers/dashboardInfo';
 import { FilterBarOrientation } from 'src/dashboard/types';
+import { NEW_DASHBOARD_ID } from 'src/dashboard/util/constants';
 import { refreshChart } from 'src/components/Chart/chartAction';
 import { UPDATE_COMPONENTS_PARENTS_LIST } from 'src/dashboard/actions/dashboardLayout';
 import { ADD_TOAST } from 'src/components/MessageToasts/actions';
@@ -234,6 +235,116 @@ describe('dashboardState actions', () => {
       expect(
         parsedJsonMetadata.positions[DASHBOARD_GRID_ID].parents,
       ).toStrictEqual(mockParentsList);
+    });
+
+    // ZetaIQ: a copy carries its folder (save-paths spec §7.4).
+    test('a copy is sent with its folder', async () => {
+      const { getState, dispatch } = setup({
+        dashboardState: { hasUnsavedChanges: true },
+      });
+      await saveDashboardRequest(
+        { ...newDashboardData, zetaPath: 'Copies' },
+        1,
+        SAVE_TYPE_NEWDASHBOARD,
+      )(dispatch, getState);
+      const call = postStub.mock.calls[0][0];
+      expect(call.endpoint).toBe('/api/v1/dashboard/1/copy/');
+      expect(call.headers['X-Zeta-Path']).toBe('Copies');
+    });
+
+    // ZetaIQ: a dashboard not stored yet sends its colors with its first Save, not to /colors.
+    test('label colors of a dashboard not stored yet are not stored on their own', async () => {
+      const { getState, dispatch } = setup({
+        dashboardInfo: { id: NEW_DASHBOARD_ID, metadata: {} },
+        dashboardState: {
+          labelsColorMapMustSync: true,
+          sharedLabelsColorsMustSync: true,
+        },
+      });
+      await persistDashboardLabelsColor()(dispatch, getState);
+      expect(putStub).not.toHaveBeenCalled();
+    });
+
+    // ZetaIQ: a new dashboard is stored only by its first Save, with its folder (save-paths spec §7.3).
+    test('a new dashboard is created with its folder in one request', async () => {
+      const { getState, dispatch } = setup({
+        dashboardState: { hasUnsavedChanges: true },
+      });
+      mockNavigateTo.mockClear();
+      postStub.mockResolvedValueOnce({ json: { id: 42 } } as any);
+      const thunk = saveDashboardRequest(
+        { ...newDashboardData, zetaPath: "Sahil's Draft/Zone ä", uuid: 'u-1' },
+        NEW_DASHBOARD_ID,
+        SAVE_TYPE_OVERWRITE,
+      );
+      await thunk(dispatch, getState);
+      expect(putStub).not.toHaveBeenCalled();
+      expect(postStub).toHaveBeenCalledTimes(1);
+      const call = postStub.mock.calls[0][0];
+      expect(call.endpoint).toBe('/api/v1/dashboard/');
+      expect(call.headers['X-Zeta-Path']).toBe(
+        "Sahil's%20Draft%2FZone%20%C3%A4",
+      );
+      expect(call.jsonPayload.uuid).toBe('u-1');
+      expect(call.jsonPayload.published).toBe(true);
+      expect(
+        JSON.parse(call.jsonPayload.json_metadata).positions,
+      ).toBeDefined();
+      expect(mockNavigateTo).toHaveBeenCalledWith(
+        '/superset/dashboard/42/?edit=true',
+        { assign: true },
+      );
+      // final review I1: saved, so leaving the page must not ask "Leave site?"
+      const clean = dispatch.mock.calls.findIndex(
+        ([action]) =>
+          action?.type === 'SET_UNSAVED_CHANGES' &&
+          action.payload.hasUnsavedChanges === false,
+      );
+      expect(clean).toBeGreaterThanOrEqual(0);
+      expect(dispatch.mock.invocationCallOrder[clean]).toBeLessThan(
+        mockNavigateTo.mock.invocationCallOrder[0],
+      );
+    });
+
+    test('a retry after a lost response opens the dashboard already created', async () => {
+      const { getState, dispatch } = setup({
+        dashboardState: { hasUnsavedChanges: true },
+      });
+      mockNavigateTo.mockClear();
+      postStub.mockRejectedValueOnce(new Error('network'));
+      getStub.mockResolvedValueOnce({ json: { result: { id: 43 } } } as any);
+      const thunk = saveDashboardRequest(
+        { ...newDashboardData, zetaPath: 'Mine', uuid: 'u-2' },
+        NEW_DASHBOARD_ID,
+        SAVE_TYPE_OVERWRITE,
+      );
+      await thunk(dispatch, getState);
+      expect(getStub.mock.calls[0][0].endpoint).toBe('/api/v1/dashboard/u-2');
+      expect(mockNavigateTo).toHaveBeenCalledWith(
+        '/superset/dashboard/43/?edit=true',
+        { assign: true },
+      );
+    });
+
+    test('a refused first save keeps the page and says why', async () => {
+      const { getState, dispatch } = setup({
+        dashboardState: { hasUnsavedChanges: true },
+      });
+      mockNavigateTo.mockClear();
+      postStub.mockRejectedValueOnce(
+        new Response(JSON.stringify({ message: 'path_required' }), {
+          status: 400,
+        }),
+      );
+      getStub.mockRejectedValueOnce(new Response('{}', { status: 404 }));
+      const thunk = saveDashboardRequest(
+        { ...newDashboardData, uuid: 'u-3' },
+        NEW_DASHBOARD_ID,
+        SAVE_TYPE_OVERWRITE,
+      );
+      await thunk(dispatch, getState);
+      expect(mockNavigateTo).not.toHaveBeenCalled();
+      await waitFor(() => expect(findDangerToast(dispatch)).toBeDefined());
     });
 
     // eslint-disable-next-line no-restricted-globals -- TODO: Migrate from describe blocks

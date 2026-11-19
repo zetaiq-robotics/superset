@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+import { getExtensionsRegistry } from '@superset-ui/core';
 import { render, screen, userEvent } from 'spec/helpers/testing-library';
 import SaveModal from 'src/dashboard/components/SaveModal';
 import {
@@ -175,4 +176,41 @@ test('cancel closes the modal without calling onSave', async () => {
 
   expect(defaultProps.onSave).not.toHaveBeenCalled();
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
+// ZetaIQ: a copy needs a folder too (save-paths spec §7.4).
+afterEach(() =>
+  getExtensionsRegistry().set('dashboard.save.folder', undefined),
+);
+
+test('save-as asks for a folder and sends it with the copy', async () => {
+  const seen: unknown[] = [];
+  getExtensionsRegistry().set('dashboard.save.folder', props => {
+    seen.push(props);
+    return (
+      <button type="button" onClick={() => props.onChange('Copies', true)}>
+        pick folder
+      </button>
+    );
+  });
+  await openModal({ saveType: SAVE_TYPE_NEWDASHBOARD });
+  expect(seen[0]).toMatchObject({ mode: 'saveas', dashboardId: 1 });
+  await userEvent.click(screen.getByTestId('modal-save-dashboard-button'));
+  expect(defaultProps.onSave).not.toHaveBeenCalled();
+  expect(defaultProps.addDangerToast).toHaveBeenCalledWith(
+    'Pick a folder for the copy',
+  );
+  await userEvent.click(screen.getByText('pick folder'));
+  await userEvent.click(screen.getByTestId('modal-save-dashboard-button'));
+  const [data, , saveType] = defaultProps.onSave.mock.calls[0];
+  expect(saveType).toBe(SAVE_TYPE_NEWDASHBOARD);
+  expect(data.zetaPath).toBe('Copies');
+});
+
+test('overwriting asks for no folder', async () => {
+  getExtensionsRegistry().set('dashboard.save.folder', () => (
+    <span>folder field</span>
+  ));
+  await openModal();
+  expect(screen.queryByText('folder field')).not.toBeInTheDocument();
 });

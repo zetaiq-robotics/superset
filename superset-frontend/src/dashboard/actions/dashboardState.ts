@@ -46,6 +46,7 @@ import { t } from '@apache-superset/core/translation';
 import { chart as initChart } from 'src/components/Chart/chartReducer';
 import { applyDefaultFormData } from 'src/explore/store';
 import {
+  NEW_DASHBOARD_ID,
   SAVE_TYPE_OVERWRITE,
   SAVE_TYPE_OVERWRITE_CONFIRMED,
 } from 'src/dashboard/util/constants';
@@ -497,6 +498,9 @@ interface DashboardSaveData extends JsonObject {
   positions?: JsonObject;
   duplicate_slices?: boolean;
   theme_id?: number | null;
+  // Modified by ZetaIQ: a first Save's folder (sent as X-Zeta-Path) and the page's uuid for it.
+  zetaPath?: string | null;
+  uuid?: string;
 }
 
 export function saveDashboardRequest(
@@ -688,6 +692,56 @@ export function saveDashboardRequest(
       dispatch(addDangerToast(errorText));
     };
 
+    // Modified by ZetaIQ: a dashboard not stored yet is created whole, with its folder, in one
+    // request (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+    if (id === NEW_DASHBOARD_ID) {
+      const { chartConfiguration, globalChartConfiguration } =
+        handleChartConfiguration();
+      const metadata = cleanedData.metadata as JsonObject;
+      const { uuid, zetaPath } = data;
+      const open = (createdId: number) => {
+        dispatch(saveDashboardFinished());
+        dispatch(setUnsavedChanges(false)); // stored: leaving must not ask "Leave site?"
+        navigateTo(`/superset/dashboard/${createdId}/?edit=true`, {
+          assign: true,
+        });
+      };
+      return SupersetClient.post({
+        endpoint: '/api/v1/dashboard/',
+        headers: zetaPath
+          ? { 'X-Zeta-Path': encodeURIComponent(zetaPath) }
+          : undefined,
+        jsonPayload: {
+          dashboard_title: cleanedData.dashboard_title,
+          css: cleanedData.css,
+          uuid,
+          published: true,
+          json_metadata: safeStringify({
+            ...metadata,
+            positions: metadata.positions ?? cleanedData.positions,
+            default_filters: safeStringify(serializedFilters),
+            filter_scopes: serializedFilterScopes,
+            chart_configuration: chartConfiguration,
+            global_chart_configuration: globalChartConfiguration,
+          }),
+        },
+      })
+        .then(({ json }) => open((json as JsonObject).id as number))
+        .catch(async error => {
+          // The create may have committed with its answer lost: the same uuid finds it.
+          const existing = uuid
+            ? await SupersetClient.get({
+                endpoint: `/api/v1/dashboard/${uuid}`,
+              }).catch(() => null)
+            : null;
+          const found = (existing?.json as JsonObject | undefined)?.result as
+            | JsonObject
+            | undefined;
+          if (found?.id) return open(found.id as number);
+          return onError(error as Response);
+        });
+    }
+
     if (
       [SAVE_TYPE_OVERWRITE, SAVE_TYPE_OVERWRITE_CONFIRMED].includes(saveType)
     ) {
@@ -843,6 +897,10 @@ export function saveDashboardRequest(
 
     return SupersetClient.post({
       endpoint: `/api/v1/dashboard/${id}/copy/`,
+      // Modified by ZetaIQ: the copy is created in its folder (save-paths spec §7.4).
+      headers: data.zetaPath
+        ? { 'X-Zeta-Path': encodeURIComponent(data.zetaPath) }
+        : undefined,
       jsonPayload: copyPayload,
     })
       .then(response => onCopySuccess(response))
@@ -1378,10 +1436,12 @@ export const persistDashboardLabelsColor =
     if (labelsColorMapMustSync || sharedLabelsColorsMustSync) {
       dispatch(setDashboardLabelsColorMapSynced());
       dispatch(setDashboardSharedLabelsColorsSynced());
-      trackOwnWrite(storeDashboardColorConfig(id, metadata))
-        .then(({ json }) => dispatch(adoptOwnWrite(id, json)))
-        // a background write: nothing for the person to act on
-        .catch(error => logging.warn('Dashboard colour sync failed', error));
+      // Modified by ZetaIQ: a dashboard not stored yet sends its colors with its first Save.
+      if (id !== NEW_DASHBOARD_ID)
+        trackOwnWrite(storeDashboardColorConfig(id, metadata))
+          .then(({ json }) => dispatch(adoptOwnWrite(id, json)))
+          // a background write: nothing for the person to act on
+          .catch(error => logging.warn('Dashboard colour sync failed', error));
     }
   };
 

@@ -23,6 +23,8 @@
  * (once any unsaved edits are discarded).
  * Modified by ZetaIQ: says why the dashboard went away; "Update waiting".
  */
+// Modified by ZetaIQ: /superset/dashboard/new/ builds a dashboard in the page; nothing is stored until its
+// first Save (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
 import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
 import { Global } from '@emotion/react';
 import { useHistory } from 'react-router-dom';
@@ -51,7 +53,12 @@ import { URL_PARAMS } from 'src/constants';
 import { getUrlParam } from 'src/utils/urlUtils';
 import { sanitizeDocumentTitle } from 'src/utils/sanitizeDocumentTitle';
 import { setDatasetsStatus } from 'src/dashboard/actions/dashboardState';
-import { DASHBOARD_HEADER_ID } from 'src/dashboard/util/constants';
+import {
+  DASHBOARD_HEADER_ID,
+  NEW_DASHBOARD,
+  NEW_DASHBOARD_ID,
+} from 'src/dashboard/util/constants';
+import { getUserSubjects } from 'src/dashboard/util/permissionUtils';
 import {
   getFilterValue,
   getPermalinkValue,
@@ -142,7 +149,7 @@ const selectActiveFilters = createSelector(
   }),
 );
 
-export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
+const StoredDashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   const theme = useTheme();
   const dispatch = useDispatch();
   const history = useHistory();
@@ -521,5 +528,103 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     </>
   );
 };
+
+// ZetaIQ: a v4 uuid; crypto.randomUUID exists only in secure contexts, getRandomValues everywhere.
+const newUuid = (): string => {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] % 16) + 64; // version 4
+  b[8] = (b[8] % 64) + 128; // RFC 4122 variant
+  const hex = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+// ZetaIQ: an empty dashboard held in the page, edited by the person opening it.
+const newDashboard = () =>
+  ({
+    id: NEW_DASHBOARD_ID,
+    isNew: true,
+    uuid: newUuid(),
+    dashboard_title: t('[ untitled dashboard ]'),
+    slug: null,
+    css: '',
+    metadata: {},
+    position_data: null,
+    published: true,
+    changed_on: null,
+    editors: getUserSubjects().map(id => ({ id })),
+    extra_editors: [],
+    viewers: [],
+    tags: [],
+    theme: null,
+  }) as unknown as Parameters<typeof hydrateDashboard>[0]['dashboard'];
+
+const NewDashboardPage: FC = () => {
+  const theme = useTheme();
+  const dispatch = useDispatch();
+  const history = useHistory();
+  const dashboardPageId = useMemo(() => nanoid(), []);
+  const isHydrated = useSelector<RootState, boolean>(
+    ({ dashboardInfo }) =>
+      !!(dashboardInfo as { isNew?: boolean } | undefined)?.isNew,
+  );
+  useEffect(() => {
+    dispatch(
+      hydrateDashboard({
+        history,
+        dashboard: newDashboard(),
+        charts: [],
+        activeTabs: null,
+        dataMask: {},
+        chartStates: null,
+        editMode: true,
+      } as unknown as Parameters<typeof hydrateDashboard>[0]),
+    );
+    dispatch(clearDashboardHistory());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const relevantDataMask = useSelector(selectRelevantDatamask);
+  const activeFilters = useSelector(selectActiveFilters);
+  const globalStyles = useMemo(
+    () => [
+      filterCardPopoverStyle(),
+      headerStyles(theme),
+      chartContextMenuStyles(theme),
+      focusStyle(theme),
+      chartHeaderStyles(theme),
+    ],
+    [theme],
+  );
+  const DashboardBuilderComponent = useMemo(() => <DashboardBuilder />, []);
+  return (
+    <>
+      <Global styles={globalStyles} />
+      {isHydrated ? (
+        <>
+          <SyncDashboardState dashboardPageId={dashboardPageId} />
+          <DashboardPageIdContext.Provider value={dashboardPageId}>
+            <AutoRefreshProvider>
+              <DashboardContainer
+                activeFilters={activeFilters as ActiveFilters}
+                ownDataCharts={relevantDataMask}
+              >
+                {DashboardBuilderComponent}
+              </DashboardContainer>
+            </AutoRefreshProvider>
+          </DashboardPageIdContext.Provider>
+        </>
+      ) : (
+        <Loading />
+      )}
+    </>
+  );
+};
+
+export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) =>
+  idOrSlug === NEW_DASHBOARD ? (
+    <NewDashboardPage />
+  ) : (
+    <StoredDashboardPage idOrSlug={idOrSlug} />
+  );
 
 export default DashboardPage;

@@ -41,7 +41,10 @@ import {
   clearDashboardHistory,
   UPDATE_COMPONENTS,
 } from 'src/dashboard/actions/dashboardLayout';
-import { DASHBOARD_HEADER_ID } from 'src/dashboard/util/constants';
+import {
+  DASHBOARD_HEADER_ID,
+  NEW_DASHBOARD_ID,
+} from 'src/dashboard/util/constants';
 import { getUrlParam } from 'src/utils/urlUtils';
 import DashboardPage from './DashboardPage';
 
@@ -718,4 +721,66 @@ test('clears undo history after hydrating the dashboard', async () => {
   const clearOrder = (clearDashboardHistory as jest.Mock).mock
     .invocationCallOrder[0];
   expect(clearOrder).toBeGreaterThan(hydrateOrder);
+});
+
+// ZetaIQ: a new dashboard is built in the page and stored only by its first Save (save-paths spec §7.3).
+test('a new dashboard fetches nothing and hydrates an empty dashboard in edit mode', async () => {
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="new" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: {},
+        dashboardState: { sliceIds: [] },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+  await waitFor(() => expect(hydrateDashboard).toHaveBeenCalled());
+  expect(mockUseDashboard).not.toHaveBeenCalled();
+  expect(mockUseDashboardCharts).not.toHaveBeenCalled();
+  expect(mockUseDashboardDatasets).not.toHaveBeenCalled();
+  const arg = (hydrateDashboard as jest.Mock).mock.calls[0][0];
+  expect(arg.charts).toEqual([]);
+  expect(arg.editMode).toBe(true);
+  expect(arg.dashboard).toMatchObject({
+    id: NEW_DASHBOARD_ID,
+    isNew: true,
+    published: true,
+  });
+  expect(arg.dashboard.uuid).toMatch(/^[0-9a-f-]{36}$/);
+});
+
+// ZetaIQ: crypto.randomUUID exists only in secure contexts (final review M3); the page must still open.
+test('a new dashboard gets a uuid without crypto.randomUUID', async () => {
+  const original = crypto.randomUUID;
+  Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
+  try {
+    render(
+      <Suspense fallback="loading">
+        <DashboardPage idOrSlug="new" />
+      </Suspense>,
+      {
+        useRedux: true,
+        useRouter: true,
+        initialState: {
+          dashboardInfo: {},
+          dashboardState: { sliceIds: [] },
+          nativeFilters: { filters: {} },
+          dataMask: {},
+        },
+      },
+    );
+    await waitFor(() => expect(hydrateDashboard).toHaveBeenCalled());
+    const arg = (hydrateDashboard as jest.Mock).mock.calls[0][0];
+    expect(arg.dashboard.uuid).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  } finally {
+    Object.defineProperty(crypto, 'randomUUID', { value: original, configurable: true });
+  }
 });

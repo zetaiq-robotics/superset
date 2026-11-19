@@ -29,7 +29,7 @@ import getBootstrapData from 'src/utils/getBootstrapData';
 const bootstrapData = getBootstrapData();
 const ADMIN_ROLE_NAME = bootstrapData.common?.conf?.AUTH_ROLE_ADMIN || 'Admin';
 
-const getUserSubjects = (): number[] =>
+export const getUserSubjects = (): number[] =>
   getBootstrapData()?.common?.user_subjects ?? [];
 
 /**

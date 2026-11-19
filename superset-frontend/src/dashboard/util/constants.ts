@@ -61,6 +61,10 @@ export const UNDO_LIMIT = 50;
 export const SAVE_TYPE_OVERWRITE = 'overwrite';
 export const SAVE_TYPE_OVERWRITE_CONFIRMED = 'overwriteConfirmed';
 export const SAVE_TYPE_NEWDASHBOARD = 'newDashboard';
+// Modified by ZetaIQ: a dashboard not stored yet is shown at /superset/dashboard/new/ with id 0;
+// its first Save creates it (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+export const NEW_DASHBOARD = 'new';
+export const NEW_DASHBOARD_ID = 0;
 
 // default dashboard layout data size limit
 // could be overwritten by server-side config

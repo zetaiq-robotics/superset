@@ -80,7 +80,7 @@ const defaultProps: Omit<SliceAdderProps, 'theme'> = {
   updateSlices: jest.fn(),
   selectedSliceIds: [127, 128],
   userId: 1,
-  dashboardId: 0,
+  dashboardId: 7,
   editMode: false,
   errorMessage: '',
   isLoading: false,
@@ -149,13 +149,23 @@ describe('SliceAdder', () => {
     );
   });
 
+  // ZetaIQ: a new chart needs a stored dashboard to land on (save-paths spec §7.3).
+  test('a dashboard not stored yet cannot create a chart for itself', () => {
+    const windowSpy = jest.spyOn(window, 'open').mockImplementation();
+    renderSliceAdder({ ...defaultProps, dashboardId: 0 });
+    const createButton = screen.getByText('Create new chart').closest('button');
+    expect(createButton).toBeDisabled();
+    expect(createButton).toHaveAttribute('title', 'Save the dashboard first');
+    windowSpy.mockRestore();
+  });
+
   test('opens new chart in new tab when create new chart is clicked', () => {
     const windowSpy = jest.spyOn(window, 'open').mockImplementation();
     renderSliceAdder();
     const createButton = screen.getByText('Create new chart');
     fireEvent.click(createButton);
     expect(windowSpy).toHaveBeenCalledWith(
-      '/chart/add?dashboard_id=0',
+      '/chart/add?dashboard_id=7',
       '_blank',
       'noopener noreferrer',
     );

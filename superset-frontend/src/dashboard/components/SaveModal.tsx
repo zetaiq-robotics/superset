@@ -17,7 +17,7 @@
  * under the License.
  */
 /* eslint-env browser */
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Radio, RadioChangeEvent } from '@superset-ui/core/components/Radio';
 import {
   Button,
@@ -28,7 +28,11 @@ import {
   Flex,
 } from '@superset-ui/core/components';
 import { t } from '@apache-superset/core/translation';
-import { isFeatureEnabled, FeatureFlag } from '@superset-ui/core';
+import {
+  isFeatureEnabled,
+  FeatureFlag,
+  getExtensionsRegistry,
+} from '@superset-ui/core';
 import { useTheme } from '@apache-superset/core/theme';
 
 import {
@@ -91,6 +95,15 @@ function SaveModal({
     `${dashboardTitle} ${t('[copy]')}`,
   );
   const [duplicateSlices, setDuplicateSlices] = useState(false);
+  // Modified by ZetaIQ: a copy needs a folder (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.4).
+  const Folder = getExtensionsRegistry().get('dashboard.save.folder');
+  const [folder, setFolder] = useState<{ path: string | null; valid: boolean }>(
+    { path: null, valid: false },
+  );
+  const onFolderChange = useCallback(
+    (path: string | null, valid: boolean) => setFolder({ path, valid }),
+    [],
+  );
 
   const toggleDuplicateSlices = () => {
     setDuplicateSlices(prev => !prev);
@@ -131,8 +144,14 @@ function SaveModal({
       data.viewers = dashboardInfo.viewers;
     }
 
+    if (saveType === SAVE_TYPE_NEWDASHBOARD && Folder) {
+      data.zetaPath = folder.path;
+    }
+
     if (saveType === SAVE_TYPE_NEWDASHBOARD && !newDashName) {
       addDangerToast(t('You must pick a name for the new dashboard'));
+    } else if (saveType === SAVE_TYPE_NEWDASHBOARD && Folder && !folder.valid) {
+      addDangerToast(t('Pick a folder for the copy'));
     } else {
       onSave(data, dashboardId, saveType);
       modal?.current?.close?.();
@@ -177,6 +196,15 @@ function SaveModal({
               onChange={e => handleNameChange(e.target.value)}
             />
           </Form.Item>
+
+          {Folder && saveType === SAVE_TYPE_NEWDASHBOARD && (
+            <Folder
+              mode="saveas"
+              sourcePath={null}
+              dashboardId={dashboardId}
+              onChange={onFolderChange}
+            />
+          )}
 
           <Form.Item>
             <Checkbox

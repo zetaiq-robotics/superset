@@ -40,6 +40,7 @@ import {
 } from './dashboardInfo';
 import { SaveFilterChangesType } from '../components/nativeFilters/FiltersConfigModal/types';
 import { trackOwnWrite } from '../live/versionTracker';
+import { NEW_DASHBOARD_ID } from '../util/constants';
 
 export const SET_NATIVE_FILTERS_CONFIG_BEGIN =
   'SET_NATIVE_FILTERS_CONFIG_BEGIN';
@@ -74,6 +75,27 @@ const isFilterChangesEmpty = (filterChanges: SaveFilterChangesType) =>
     array => Array.isArray(array) && !array.length,
   );
 
+// ZetaIQ: what the /filters endpoint answers, worked out in the page: every filter after the changes, in order.
+const mergeFilterChanges = (
+  current: Filters | undefined,
+  changes: SaveFilterChangesType,
+): Filter[] => {
+  const merged: Record<string, Filters[string] | Filter | Divider> = {
+    ...(current ?? {}),
+  };
+  changes.modified.forEach(filter => {
+    merged[filter.id] = filter;
+  });
+  (changes.deleted ?? []).forEach(id => {
+    delete merged[id];
+  });
+  const order = [
+    ...(changes.reordered ?? []).filter(id => id in merged),
+    ...Object.keys(merged).filter(id => !(changes.reordered ?? []).includes(id)),
+  ];
+  return order.map(id => merged[id]) as Filter[];
+};
+
 export const setFilterConfiguration =
   (filterChanges: SaveFilterChangesType) =>
   async (dispatch: Dispatch, getState: () => RootState) => {
@@ -94,15 +116,23 @@ export const setFilterConfiguration =
       endpoint: `/api/v1/dashboard/${id}/filters`,
     });
     try {
-      const response = await trackOwnWrite(updateFilters(filterChanges));
-      // a single-field write: no If-Match, but it moves the version
-      dispatch(adoptOwnWrite(id, response));
+      // Modified by ZetaIQ: a dashboard not stored yet keeps its filters in the page; its first Save
+      // sends them (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+      let result: (Filter | Divider)[];
+      if (id === NEW_DASHBOARD_ID) {
+        result = mergeFilterChanges(oldFilters, filterChanges);
+      } else {
+        const response = await trackOwnWrite(updateFilters(filterChanges));
+        // a single-field write: no If-Match, but it moves the version
+        dispatch(adoptOwnWrite(id, response));
+        result = response.result;
+      }
       // chartsInScope/tabsInScope are derived from the live layout, and the
       // response carries the persisted copy for every filter - including the
       // ones this save never touched, whose copy is whatever was stored when
       // the dashboard was last saved. Dropping them lets the reducers keep the
       // scopes calculateScopes already computed for this session.
-      const savedFilters = response.result.map(
+      const savedFilters = result.map(
         filter => omit(filter, ['chartsInScope', 'tabsInScope']) as Filter,
       );
       dispatch({

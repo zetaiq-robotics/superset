@@ -129,7 +129,11 @@ const publishDataMask = debounce(
     const nativeFiltersCacheKey = getUrlParam(URL_PARAMS.nativeFiltersKey);
     const dataMask = JSON.stringify(dataMaskSelected);
 
-    if (
+    if (!Number(dashboardId)) {
+      // Modified by ZetaIQ: a dashboard not stored yet has no filter state to keep
+      // (docs/specs/2026-11-19-dashboard-save-paths-design.md §7.3).
+      dataMaskKey = null;
+    } else if (
       updateKey &&
       nativeFiltersCacheKey &&
       (await updateFilterKey(
