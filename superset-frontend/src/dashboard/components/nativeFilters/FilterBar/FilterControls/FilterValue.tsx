@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a dependent filter waits for a pick in every parent
+ * ("Choose <parent> first") instead of listing all values.
  */
 import {
   FC,
@@ -47,7 +50,7 @@ import { useDispatch, useSelector, shallowEqual } from 'react-redux';
 import { isEqual, isEqualWith } from 'lodash-es';
 import { requestChartDataResolved } from 'src/components/Chart/chartAction';
 import { ErrorAlert, ErrorMessageWithStackTrace } from 'src/components';
-import { Loading, Constants, Flex } from '@superset-ui/core/components';
+import { Loading, Constants, Flex, Select } from '@superset-ui/core/components';
 import { useAsyncModeOverride } from 'src/utils/asyncMode';
 import { FilterBarOrientation, RootState } from 'src/dashboard/types';
 import {
@@ -84,6 +87,12 @@ const StyledDiv = styled.div<{
 `;
 
 const queriesDataPlaceholder = [{ data: [{}] }];
+
+// Modified by ZetaIQ: nothing picked in a filter (no value, or an empty list).
+export const isEmptyPick = (value: unknown) =>
+  value === undefined ||
+  value === null ||
+  (Array.isArray(value) && value.length === 0);
 
 const useShouldFilterRefresh = () => {
   const isDashboardRefreshing = useSelector<RootState, boolean>(
@@ -123,6 +132,18 @@ const FilterValue: FC<FilterValueProps> = ({
   const dependencies = useFilterDependencies(id, dataMaskSelected);
   const transitiveParentIds = useTransitiveParentIds(id);
   const shouldRefresh = useShouldFilterRefresh();
+  // Modified by ZetaIQ: a dependent filter lists values only once every
+  // parent has a pick (selected, applied or not): with a parent empty it
+  // shows "Choose <parent> first" and runs no query, as chained dashboard
+  // variables do. The name of the first parent without a pick, or undefined.
+  const missingParent = useSelector<RootState, string | undefined>(state => {
+    const pId = (filter.cascadeParentIds ?? []).find(parentId =>
+      isEmptyPick(dataMaskSelected?.[parentId]?.filterState?.value),
+    );
+    return pId === undefined
+      ? undefined
+      : (state.nativeFilters?.filters?.[pId]?.name ?? t('the filter above'));
+  });
 
   // Derive only the defaultToFirstItem flag per filter to avoid re-renders
   // when unrelated filter config fields change.
@@ -198,7 +219,7 @@ const FilterValue: FC<FilterValueProps> = ({
   }, [inView, inViewFirstTime, setInViewFirstTime]);
 
   useEffect(() => {
-    if (!inViewFirstTime) {
+    if (!inViewFirstTime || missingParent !== undefined) {
       return;
     }
     const newFormData = getFormData({
@@ -323,6 +344,7 @@ const FilterValue: FC<FilterValueProps> = ({
     transitiveParentIds,
     parentDefaultToFirstItem,
     asyncModeOverride,
+    missingParent,
   ]);
 
   useEffect(() => {
@@ -340,6 +362,17 @@ const FilterValue: FC<FilterValueProps> = ({
     (dataMask: DataMask) => onFilterSelectionChange(filter, dataMask),
     [filter, onFilterSelectionChange],
   );
+
+  // Modified by ZetaIQ: a parent left empty clears this filter's pick, which
+  // belonged to the parent's old value. Its list loads again once the parent
+  // has a pick.
+  const ownValue = dataMaskSelected?.[id]?.filterState?.value;
+  useEffect(() => {
+    if (missingParent === undefined) return;
+    if (!isEmptyPick(ownValue)) {
+      setDataMask({ extraFormData: {}, filterState: { value: null } });
+    }
+  }, [missingParent, ownValue, setDataMask]);
 
   const setFocusedFilter = useCallback(() => {
     if (isCustomization) {
@@ -446,7 +479,16 @@ const FilterValue: FC<FilterValueProps> = ({
       orientation={orientation}
       overflow={overflow}
     >
-      {isLoading ? (
+      {missingParent !== undefined ? (
+        // Modified by ZetaIQ: waits for its parent, see missingParent
+        <Select
+          data-test="filter-awaiting-parent"
+          ariaLabel={filter.name}
+          disabled
+          options={[]}
+          placeholder={t('Choose %s first', missingParent)}
+        />
+      ) : isLoading ? (
         <Flex align="center">
           <Loading position="inline" size="s" muted />
           {hasDepsFilterValue
