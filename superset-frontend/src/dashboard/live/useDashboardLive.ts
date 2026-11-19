@@ -53,7 +53,7 @@ import {
   DashboardChanged,
   UnavailableReason,
 } from './classifyEvent';
-import { refreshInPlace, RefreshResult } from './refreshInPlace';
+import { LIVE_TOAST_MS, refreshInPlace, RefreshResult } from './refreshInPlace';
 import {
   NO_VERSIONS,
   noteNewer,
@@ -320,7 +320,12 @@ export function useDashboardLive(dashboardUuid: string) {
     const defer = () => {
       pending!.deferred = true;
       dispatch(
-        addInfoToast(t("Dashboard updated. It will refresh when you're done.")),
+        addInfoToast(
+          t("Dashboard updated. It will refresh when you're done."),
+          {
+            duration: LIVE_TOAST_MS,
+          },
+        ),
       );
       setLive(s => ({ ...s, waiting: true }));
     };
@@ -356,7 +361,12 @@ export function useDashboardLive(dashboardUuid: string) {
           if (disposed || result === 'gone') return;
           if (result === 'applied') {
             failures = 0;
-            if (!deferred) dispatch(addInfoToast(t('Dashboard updated')));
+            if (!deferred)
+              dispatch(
+                addInfoToast(t('Dashboard updated'), {
+                  duration: LIVE_TOAST_MS,
+                }),
+              );
             // re-baseline the chart digest against the copy now loaded
             subscribe(true);
           } else {

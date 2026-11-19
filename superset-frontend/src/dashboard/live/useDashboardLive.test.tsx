@@ -62,7 +62,10 @@ jest.mock('src/middleware/realtime', () => {
   };
 });
 
-jest.mock('./refreshInPlace', () => ({ refreshInPlace: jest.fn() }));
+jest.mock('./refreshInPlace', () => ({
+  ...jest.requireActual('./refreshInPlace'),
+  refreshInPlace: jest.fn(),
+}));
 jest.mock('./changeSummary', () => ({
   ...jest.requireActual('./changeSummary'),
   loadStaleSummary: jest.fn(),
@@ -206,6 +209,30 @@ test('a viewer is told, then refreshed after the spread', async () => {
   expect(refresh).toHaveBeenCalledTimes(1);
   expect(refresh.mock.calls[0][0]).toBe(ID);
   expect(toasts(store)).toEqual(['Dashboard updated']);
+});
+
+test('live toasts stay 10 s so there is time to read them', async () => {
+  const { store } = setup();
+  mockLive = 'v2';
+  changed('v2', 2);
+  await advance(500);
+  const shown = (store.getState() as any).messageToasts;
+  expect(shown).toHaveLength(1);
+  expect(shown[0]).toMatchObject({
+    text: 'Dashboard updated',
+    duration: 10_000,
+  });
+
+  // the deferred one too
+  document.body.innerHTML =
+    '<button class="filter-bar__apply-button">Apply filters</button>';
+  mockLive = 'v3';
+  changed('v3', 3);
+  const deferred = (store.getState() as any).messageToasts.find(
+    (m: { text: string }) => m.text.endsWith("when you're done."),
+  );
+  expect(deferred).toMatchObject({ duration: 10_000 });
+  document.body.innerHTML = '';
 });
 
 test('hidden tab defers until visibilitychange', async () => {

@@ -249,6 +249,11 @@ test('drops a removed filter and toasts its name', async () => {
   expect(state.messageToasts.map((m: { text: string }) => m.text)).toContain(
     "Filter 'Site' was removed",
   );
+  expect(
+    state.messageToasts.find(
+      (m: { text: string }) => m.text === "Filter 'Site' was removed",
+    ),
+  ).toMatchObject({ duration: 10_000 });
 });
 
 test('resets a filter whose targets changed', async () => {

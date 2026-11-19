@@ -49,6 +49,10 @@ import { carryDataMask, LiveFilter } from './carryDataMask';
 import type { UnavailableReason } from './classifyEvent';
 import { NO_VERSIONS, ownWritesInFlight } from './versionTracker';
 
+/** How long live toasts stay (Superset's info default is 4 s): long enough to
+ * read; the toast's × clears it sooner. */
+export const LIVE_TOAST_MS = 10_000;
+
 export type RefreshResult = 'applied' | 'skipped' | 'gone';
 
 export type RefreshOptions = {
@@ -291,7 +295,11 @@ export const refreshInPlace =
       ),
     );
     removedFilterNames.forEach(name =>
-      dispatch(addInfoToast(t("Filter '%s' was removed", name))),
+      dispatch(
+        addInfoToast(t("Filter '%s' was removed", name), {
+          duration: LIVE_TOAST_MS,
+        }),
+      ),
     );
     if (anchor) {
       requestAnimationFrame(() => {
