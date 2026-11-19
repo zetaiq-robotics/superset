@@ -25,6 +25,9 @@ pinned commit of this fork. The playbook is `services/zeta-superset/FORK.md` the
 5. **Pull requests** target this repository: `gh repo set-default zetaiq-robotics/superset`, and pass
    `--repo zetaiq-robotics/superset --base zetaiq/<tag>` to `gh pr create`. Never open one against `apache/superset`
    by accident; upstream contributions are deliberate, from a separate branch cut from upstream `master`.
+   Small, self-contained fixes may be pushed straight to `zetaiq/<tag>` as one commit that follows rules 2 and 3,
+   tested locally, as a fast-forward (never a force-push); features go through a pull request. Either way the
+   telemetry pull request that moves `FORK_SHA` is where the change is reviewed.
 6. **GitHub Actions stay off.** Never add Docker Hub or any publishing secrets to this repository.
 7. **This repository is public** (forks of public repositories must be). Nothing secret goes here.
 8. **Security:** a Superset release with a CVE fix means a rebase within days. Never fix a security issue silently;
