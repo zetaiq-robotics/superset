@@ -494,6 +494,20 @@ test('createDashboard handles success', async () => {
   expect(dashboard).toEqual(dashboardResponsePayload);
 });
 
+// ZetaIQ: a new dashboard is created in its folder (save-paths spec §7.4, Review Focus 3).
+test('createDashboard sends its folder as X-Zeta-Path, encoded', async () => {
+  fetchMock.post(createDashboardEndpoint, dashboardResponsePayload, {
+    name: createDashboardEndpoint,
+  });
+  await createDashboard(dashboardName, "Sahil's Draft/Zone ä")(
+    jest.fn() as Dispatch<any>,
+  );
+  const [call] = fetchMock.callHistory.calls(createDashboardEndpoint);
+  expect(
+    new Headers(call.options.headers as HeadersInit).get('X-Zeta-Path'),
+  ).toBe("Sahil's%20Draft%2FZone%20%C3%A4");
+});
+
 test('createDashboard handles failure', async () => {
   fetchMock.post(
     createDashboardEndpoint,

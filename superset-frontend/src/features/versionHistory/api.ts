@@ -133,6 +133,10 @@ export async function createChartFromSnapshot(
   }
   const { json } = await SupersetClient.post({
     endpoint: '/api/v1/chart/',
+    // Modified by ZetaIQ: the new chart takes its source chart's folder (save-paths spec §7.4).
+    headers: snapshot.uuid
+      ? { 'X-Zeta-Path-Of': `chart:${snapshot.uuid}` }
+      : undefined,
     jsonPayload: {
       slice_name: name,
       viz_type: snapshot.viz_type,
