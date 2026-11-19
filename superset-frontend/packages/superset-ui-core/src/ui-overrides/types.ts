@@ -323,6 +323,10 @@ export type Extensions = Partial<{
   // Modified by ZetaIQ: a component before the dashboard title (a way back to the list).
   'dashboard.nav.left': ComponentType;
   'dashboard.nav.right': ComponentType;
+  // Modified by ZetaIQ: whether timed refresh can run now, and why not (e.g. the time window is fixed, so a refresh
+  // would re-run the same data). Called on every render of the dashboard header and the refresh dialog, so it may
+  // use React hooks.
+  'dashboard.refresh.policy': () => { allowed: boolean; reason?: string };
   // Modified by ZetaIQ: a control above the dashboard editor's chart list, and a line under each chart's name.
   'dashboard.slices.folder': ComponentType<DashboardSlicesFolderProps>;
   'dashboard.slices.itemSubtitle': ComponentType<{ chartId: number }>;

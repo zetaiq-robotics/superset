@@ -19,6 +19,7 @@
  * Modified by ZetaIQ: no Certification section; a typed new tag is created and swapped for its id.
  * Modified by ZetaIQ: a save sends the loaded version as If-Match; a 412 offers Overwrite.
  * Modified by ZetaIQ: the save counts as an own write and moves the page's base.
+ * Modified by ZetaIQ: the Refresh section sets each chart's own rate and honours the dashboard's minimum.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { omit } from 'lodash-es';
@@ -80,6 +81,8 @@ import { StaleSaveModal } from 'src/dashboard/components/StaleSaveModal';
 import { AsyncModeOverride } from 'src/utils/asyncMode';
 import { StandardModal, useModalValidation } from 'src/components/Modal';
 import { validateRefreshFrequency } from '../RefreshFrequency';
+import { useRefreshRules } from '../RefreshFrequency/refreshRules';
+import { NEVER } from './sections/RefreshSection';
 import {
   BasicInfoSection,
   AccessSection,
@@ -646,6 +649,37 @@ const PropertiesModal = ({
 
   // Section handlers for extracted components
   const handleThemeChange = (value: any) => setSelectedThemeId(value || null);
+  // Modified by ZetaIQ: each chart's own refresh rate lives in the JSON
+  // metadata: `chart_refresh_intervals` (chart id to seconds) and, for Never,
+  // upstream's `timed_refresh_immune_slices`.
+  const refreshRules = useRefreshRules();
+  const chartRates = (() => {
+    const meta = getJsonMetadata();
+    const rates: Record<string, number> = {
+      ...(meta.chart_refresh_intervals ?? {}),
+    };
+    (meta.timed_refresh_immune_slices ?? []).forEach((id: number) => {
+      rates[String(id)] = NEVER;
+    });
+    return rates;
+  })();
+  const handleChartRateChange = (chartId: number, rate: number) => {
+    const meta = parseJsonMetadata();
+    if (!meta) return; // the Advanced editor holds unfinished JSON: leave it
+    const key = String(chartId);
+    const intervals = { ...(meta.chart_refresh_intervals ?? {}) };
+    delete intervals[key];
+    if (rate > 0) intervals[key] = rate;
+    const immune = (meta.timed_refresh_immune_slices ?? []).filter(
+      (id: number) => id !== chartId,
+    );
+    if (rate === NEVER) immune.push(chartId);
+    meta.chart_refresh_intervals = intervals;
+    meta.timed_refresh_immune_slices = immune;
+    if (!Object.keys(intervals).length) delete meta.chart_refresh_intervals;
+    setJsonMetadata(jsonStringify(meta));
+  };
+
   const handleRefreshFrequencyChange = (value: number) => {
     setRefreshFrequency(value);
     // Keep the Advanced JSON editor in sync with the dropdown so the two
@@ -917,6 +951,9 @@ const PropertiesModal = ({
                 <RefreshSection
                   refreshFrequency={refreshFrequency}
                   onRefreshFrequencyChange={handleRefreshFrequencyChange}
+                  minimum={refreshRules.minimum}
+                  chartRates={chartRates}
+                  onChartRateChange={handleChartRateChange}
                 />
               ),
             },

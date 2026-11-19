@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: follows the dashboard's refresh rules (minimum, and a
+ * reason when timed refresh cannot run now).
  */
 import { useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -28,6 +31,7 @@ import {
   validateRefreshFrequency,
   getRefreshWarningMessage,
 } from './RefreshFrequency';
+import { useRefreshRules } from './RefreshFrequency/refreshRules';
 
 const ModalContent = styled.div`
   padding: ${({ theme }) => theme.sizeUnit * 4}px;
@@ -65,11 +69,8 @@ const RefreshIntervalModal = ({
   const [refreshFrequency, setRefreshFrequency] = useState(initialFrequency);
   const [localPauseOnInactiveTab, setLocalPauseOnInactiveTab] =
     useState(pauseOnInactiveTab);
-  const refreshLimit = useSelector(
-    (state: RootState) =>
-      state.dashboardInfo?.common?.conf
-        ?.SUPERSET_DASHBOARD_PERIODICAL_REFRESH_LIMIT,
-  );
+  const rules = useRefreshRules();
+  const refreshLimit = rules.minimum;
   const refreshWarning = useSelector(
     (state: RootState) =>
       state.dashboardInfo?.common?.conf
@@ -117,7 +118,7 @@ const RefreshIntervalModal = ({
       title={t('Refresh interval')}
       width={400}
       saveText={editMode ? t('Save') : t('Save for this session')}
-      saveDisabled={refreshErrors.length > 0}
+      saveDisabled={refreshErrors.length > 0 || !rules.allowed}
       errorTooltip={refreshErrors[0]}
     >
       <ModalContent>
@@ -126,6 +127,7 @@ const RefreshIntervalModal = ({
             label={t('Refresh frequency')}
             help={
               refreshErrors[0] ||
+              (!rules.allowed && rules.reason) ||
               (editMode
                 ? t('Set the automatic refresh frequency for this dashboard.')
                 : t('Set refresh frequency for current session only.'))
@@ -136,6 +138,8 @@ const RefreshIntervalModal = ({
             <RefreshFrequencySelect
               value={refreshFrequency}
               onChange={handleFrequencyChange}
+              minimum={rules.minimum}
+              disabled={!rules.allowed}
             />
           </Form.Item>
           <CheckboxFormItem>

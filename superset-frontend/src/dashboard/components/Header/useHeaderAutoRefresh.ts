@@ -15,6 +15,10 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: timed refresh follows the dashboard's refresh rules
+ * (RefreshFrequency/refreshRules.ts): it runs only when allowed, never faster
+ * than the minimum, and skips charts whose own slower interval has not passed.
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { useSelector, useStore } from 'react-redux';
@@ -28,6 +32,10 @@ import { useRealTimeDashboard } from 'src/dashboard/hooks/useRealTimeDashboard';
 import { useAutoRefreshContext } from 'src/dashboard/contexts/AutoRefreshContext';
 import { AutoRefreshStatus } from 'src/dashboard/types/autoRefresh';
 import { RootState } from 'src/dashboard/types';
+import {
+  chartsDue,
+  effectiveRefresh,
+} from 'src/dashboard/components/RefreshFrequency/refreshRules';
 
 // Fallback applied only when the backend does not provide the manual stagger
 // value at all (e.g. an older backend that predates the config key, or it is
@@ -51,6 +59,10 @@ type HeaderAutoRefreshProps = {
   dashboardId: number;
   refreshFrequency: number;
   timedRefreshImmuneSlices: number[];
+  // Modified by ZetaIQ: see refreshRules.ts
+  chartRefreshIntervals?: Record<string, number>;
+  refreshAllowed?: boolean;
+  refreshMinimum?: number;
   autoRefreshMode?: string;
   isLoading: boolean;
   onRefresh: (
@@ -79,12 +91,18 @@ export const useHeaderAutoRefresh = ({
   dashboardId,
   refreshFrequency,
   timedRefreshImmuneSlices,
+  chartRefreshIntervals,
+  refreshAllowed = true,
+  refreshMinimum = 0,
   autoRefreshMode,
   isLoading,
   onRefresh,
   setRefreshFrequency,
   logEvent,
 }: HeaderAutoRefreshProps): HeaderAutoRefreshResult => {
+  const timerMs = refreshAllowed
+    ? effectiveRefresh(refreshFrequency, refreshMinimum) * 1000
+    : 0;
   const store = useStore<AutoRefreshStoreState>();
   // Read the manual-refresh stagger window from the server config.
   // - missing key (e.g. an older backend) -> fall back to the built-in default
@@ -284,8 +302,13 @@ export const useHeaderAutoRefresh = ({
           return;
         }
 
-        const affectedCharts = chartIds.filter(
-          chartId => timedRefreshImmuneSlices.indexOf(chartId) === -1,
+        const affectedCharts = chartsDue(
+          chartIds,
+          timedRefreshImmuneSlices,
+          chartRefreshIntervals,
+          chartId => store.getState().charts[chartId]?.chartUpdateEndTime,
+          intervalMs,
+          Date.now(),
         );
         const force = autoRefreshMode !== 'fetch';
 
@@ -325,8 +348,10 @@ export const useHeaderAutoRefresh = ({
     [
       autoRefreshMode,
       chartIds,
+      chartRefreshIntervals,
       executeRefresh,
       stopPeriodicRender,
+      store,
       timedRefreshImmuneSlices,
     ],
   );
@@ -337,8 +362,8 @@ export const useHeaderAutoRefresh = ({
       return;
     }
 
-    startPeriodicRender(refreshFrequency * 1000);
-  }, [isPaused, refreshFrequency, startPeriodicRender, stopPeriodicRender]);
+    startPeriodicRender(timerMs);
+  }, [isPaused, timerMs, startPeriodicRender, stopPeriodicRender]);
 
   const forceRefresh = useCallback(() => {
     if (refreshInFlightRef.current && refreshPromiseRef.current) {
@@ -365,7 +390,7 @@ export const useHeaderAutoRefresh = ({
         chartId => timedRefreshImmuneSlices.indexOf(chartId) === -1,
       );
       executeRefresh(affectedCharts, true, true, 0, null, true).finally(() => {
-        startPeriodicRender(refreshFrequency * 1000);
+        startPeriodicRender(timerMs);
       });
     } else {
       setPaused(true);
@@ -376,7 +401,7 @@ export const useHeaderAutoRefresh = ({
     chartIds,
     executeRefresh,
     isPaused,
-    refreshFrequency,
+    timerMs,
     setPaused,
     setPausedByTab,
     setStatus,
@@ -386,6 +411,9 @@ export const useHeaderAutoRefresh = ({
   ]);
 
   const handleTabVisibilityRefresh = useCallback(() => {
+    if (!refreshAllowed) {
+      return Promise.resolve(); // timed refresh cannot run now (refreshRules.ts)
+    }
     if (refreshInFlightRef.current && refreshPromiseRef.current) {
       return refreshPromiseRef.current;
     }
@@ -396,11 +424,17 @@ export const useHeaderAutoRefresh = ({
       chartId => timedRefreshImmuneSlices.indexOf(chartId) === -1,
     );
     return executeRefresh(affectedCharts, true, true, 0, null, true);
-  }, [chartIds, executeRefresh, isLoading, timedRefreshImmuneSlices]);
+  }, [
+    chartIds,
+    executeRefresh,
+    isLoading,
+    refreshAllowed,
+    timedRefreshImmuneSlices,
+  ]);
 
   const handleRestartTimer = useCallback(() => {
-    startPeriodicRender(refreshFrequency * 1000);
-  }, [refreshFrequency, startPeriodicRender]);
+    startPeriodicRender(timerMs);
+  }, [timerMs, startPeriodicRender]);
 
   const handleStopTimer = useCallback(() => {
     stopPeriodicRender();

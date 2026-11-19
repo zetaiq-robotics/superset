@@ -72,23 +72,22 @@ test('saving outside edit mode reports a session-only save', async () => {
   );
 });
 
-test('an interval below the configured limit blocks save with an error', async () => {
+// Modified by ZetaIQ: intervals below the minimum are not offered at all (refreshRules.ts).
+test('intervals below the configured limit are not offered', async () => {
   setup({}, { SUPERSET_DASHBOARD_PERIODICAL_REFRESH_LIMIT: 60 });
 
-  await userEvent.click(screen.getByRole('radio', { name: '10 seconds' }));
-
   expect(
-    screen.getByText('Refresh frequency must be at least 60 seconds'),
-  ).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-
-  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-  expect(defaultProps.onChange).not.toHaveBeenCalled();
+    screen.queryByRole('radio', { name: '10 seconds' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('radio', { name: '30 seconds' }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: '1 minute' })).toBeInTheDocument();
 });
 
-test('an interval below the limit shows the configured warning alongside the error', async () => {
+test('an interval saved below the limit shows the error and the configured warning, and blocks save', async () => {
   setup(
-    {},
+    { refreshFrequency: 10 },
     {
       SUPERSET_DASHBOARD_PERIODICAL_REFRESH_LIMIT: 60,
       SUPERSET_DASHBOARD_PERIODICAL_REFRESH_WARNING_MESSAGE:
@@ -96,14 +95,13 @@ test('an interval below the limit shows the configured warning alongside the err
     },
   );
 
-  await userEvent.click(screen.getByRole('radio', { name: '10 seconds' }));
-
   expect(
     screen.getByText('Refresh frequency must be at least 60 seconds'),
   ).toBeInTheDocument();
   expect(
     screen.getByText('Frequent refreshes put load on the database'),
   ).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
 });
 
 test('the configured warning is hidden when the interval meets the limit', async () => {

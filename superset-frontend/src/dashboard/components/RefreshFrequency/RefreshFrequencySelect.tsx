@@ -15,6 +15,9 @@
  * KIND, either express or implied.  See the License for the
  * specific language governing permissions and limitations
  * under the License.
+ *
+ * Modified by ZetaIQ: a minimum hides the faster intervals; the whole select
+ * can be disabled.
  */
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
@@ -156,6 +159,9 @@ const normalizeRefreshLimitSeconds = (
 interface RefreshFrequencySelectProps {
   value: number;
   onChange: (value: number) => void;
+  // Modified by ZetaIQ: intervals below `minimum` seconds are not offered.
+  minimum?: number;
+  disabled?: boolean;
 }
 
 /**
@@ -165,7 +171,10 @@ interface RefreshFrequencySelectProps {
 export const RefreshFrequencySelect = ({
   value,
   onChange,
+  minimum = 0,
+  disabled = false,
 }: RefreshFrequencySelectProps) => {
+  const lowest = Math.max(MINIMUM_REFRESH_INTERVAL, minimum);
   const configuredIntervals = useSelector(
     (state: RootState) =>
       // The select also mounts from the Dashboard List / Home pages, where no
@@ -179,7 +188,9 @@ export const RefreshFrequencySelect = ({
     [configuredIntervals],
   );
   const presets = options.filter(
-    option => option.value !== CUSTOM_REFRESH_FREQUENCY,
+    option =>
+      option.value !== CUSTOM_REFRESH_FREQUENCY &&
+      (option.value === 0 || option.value >= minimum),
   );
 
   // Separate radio selection state from value state
@@ -227,11 +238,11 @@ export const RefreshFrequencySelect = ({
 
     if (selectedValue === CUSTOM_REFRESH_FREQUENCY) {
       // Custom selected - use current custom value or minimum
-      const numValue = parseInt(customValue, 10) || MINIMUM_REFRESH_INTERVAL;
+      const numValue = Math.max(parseInt(customValue, 10) || lowest, lowest);
       lastCustomEmittedValue.current = numValue;
       onChange(numValue);
       if (!customValue) {
-        setCustomValue(MINIMUM_REFRESH_INTERVAL.toString());
+        setCustomValue(lowest.toString());
       }
     } else {
       lastCustomEmittedValue.current = null;
@@ -244,7 +255,7 @@ export const RefreshFrequencySelect = ({
     setCustomValue(inputValue);
 
     const numValue = parseInt(inputValue, 10);
-    if (numValue >= MINIMUM_REFRESH_INTERVAL) {
+    if (numValue >= lowest) {
       lastCustomEmittedValue.current = numValue;
       onChange(numValue);
     }
@@ -253,7 +264,11 @@ export const RefreshFrequencySelect = ({
   const isCustomSelected = radioSelection === CUSTOM_REFRESH_FREQUENCY;
 
   return (
-    <StyledRadioGroup value={radioSelection} onChange={handleRadioChange}>
+    <StyledRadioGroup
+      value={radioSelection}
+      onChange={handleRadioChange}
+      disabled={disabled}
+    >
       {presets.map(option => (
         <Radio key={option.value} value={option.value}>
           {option.label}
@@ -265,11 +280,11 @@ export const RefreshFrequencySelect = ({
           {t('Custom')}
           <Input
             type="number"
-            min={MINIMUM_REFRESH_INTERVAL}
+            min={lowest}
             value={customValue}
             onChange={handleCustomInputChange}
-            placeholder={`${MINIMUM_REFRESH_INTERVAL}+`}
-            disabled={!isCustomSelected}
+            placeholder={`${lowest}+`}
+            disabled={disabled || !isCustomSelected}
             onClick={e => e.stopPropagation()}
           />
           <span>{t('seconds')}</span>

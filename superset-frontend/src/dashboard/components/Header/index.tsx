@@ -22,6 +22,7 @@
  * Modified by ZetaIQ: no Save or Save as for a dashboard deleted while it
  * was being edited (both would 404).
  * Modified by ZetaIQ: "Update waiting" beside the title while a refresh waits.
+ * Modified by ZetaIQ: timed refresh follows the dashboard's refresh rules.
  */
 /* eslint-env browser */
 import {
@@ -65,6 +66,7 @@ import { AlertObject } from 'src/features/alerts/types';
 import FirstSaveModal from 'src/dashboard/components/FirstSaveModal';
 import UndoRedoKeyListeners from 'src/dashboard/components/UndoRedoKeyListeners';
 import PropertiesModal from 'src/dashboard/components/PropertiesModal';
+import { useRefreshRules } from 'src/dashboard/components/RefreshFrequency/refreshRules';
 import RefreshIntervalModal from 'src/dashboard/components/RefreshIntervalModal';
 import {
   UNDO_LIMIT,
@@ -370,6 +372,13 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
   );
   const autoRefreshMode =
     dashboardInfo.common?.conf?.DASHBOARD_AUTO_REFRESH_MODE;
+  // Modified by ZetaIQ: timed refresh follows the dashboard's refresh rules (refreshRules.ts).
+  const refreshRules = useRefreshRules();
+  const chartRefreshIntervals = (
+    dashboardInfo.metadata as {
+      chart_refresh_intervals?: Record<string, number>;
+    }
+  )?.chart_refresh_intervals;
   const {
     forceRefresh,
     handlePauseToggle,
@@ -380,6 +389,9 @@ const Header = ({ onOpenMobileFilters }: HeaderComponentProps): JSX.Element => {
     dashboardId: dashboardInfo.id,
     refreshFrequency,
     timedRefreshImmuneSlices,
+    chartRefreshIntervals,
+    refreshAllowed: refreshRules.allowed,
+    refreshMinimum: refreshRules.minimum,
     autoRefreshMode,
     isLoading,
     onRefresh: boundActionCreators.onRefresh,
