@@ -163,7 +163,7 @@ export const refreshInPlace =
         SupersetClient.get({ endpoint: `/api/v1/dashboard/${id}/charts` }),
       ]);
     } catch (error) {
-      // deleted, unpublished or no longer shared with this person
+      // deleted or no longer shared with this person
       if ((error as { status?: number })?.status !== 404) throw error;
       if (getState().dashboardInfo.id !== id) return 'skipped';
       dispatch(dashboardUnavailable(reason));

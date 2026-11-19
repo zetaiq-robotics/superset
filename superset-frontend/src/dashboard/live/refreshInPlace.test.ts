@@ -446,11 +446,11 @@ test('404 keeps the reason of the event that led to it', async () => {
   fetchMock.get(`glob:*/api/v1/dashboard/${ID}?q=*`, 404);
   fetchMock.get(`glob:*/api/v1/dashboard/${ID}/charts`, 404);
   await store.dispatch(
-    refreshInPlace(ID, { history, charts: [], reason: 'unpublished' }) as any,
+    refreshInPlace(ID, { history, charts: [], reason: 'access' }) as any,
   );
   expect(store.getState().dashboardState).toMatchObject({
     unavailable: true,
-    unavailableReason: 'unpublished',
+    unavailableReason: 'access',
   });
 });
 

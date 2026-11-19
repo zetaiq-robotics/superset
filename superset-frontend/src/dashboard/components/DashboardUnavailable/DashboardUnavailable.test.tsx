@@ -26,11 +26,6 @@ test.each([
     'Someone who manages it can restore it from the archive.',
   ],
   [
-    'unpublished',
-    'This dashboard was moved back to draft.',
-    'Only its editors can see it until it is published again.',
-  ],
-  [
     'access',
     'You no longer have access to this dashboard.',
     'Ask its owner to share it with you again.',
@@ -38,7 +33,7 @@ test.each([
   [
     undefined,
     'This dashboard is no longer available to you.',
-    'It may have been deleted, moved to draft, or no longer shared with you.',
+    'It may have been deleted or no longer shared with you.',
   ],
 ] as const)('reason %s says why', (reason, heading, line) => {
   render(<DashboardUnavailable reason={reason} />, { useRouter: true });
