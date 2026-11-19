@@ -101,9 +101,10 @@ test('Renders the certification details', () => {
   expect(certificationDetailsElement).toBeInTheDocument();
 });
 
-test('Renders the published status', () => {
-  const publishedElement = screen.getByText(/published/i);
-  expect(publishedElement).toBeInTheDocument();
+// ZetaIQ: there is no Published/Draft state (save-paths spec §7.2).
+test('Renders no published status', () => {
+  expect(screen.queryByText(/published/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/draft/i)).not.toBeInTheDocument();
 });
 
 test('Renders the modified date', () => {
