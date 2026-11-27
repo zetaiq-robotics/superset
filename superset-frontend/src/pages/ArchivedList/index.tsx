@@ -653,7 +653,14 @@ function ArchivedList({ addDangerToast, addSuccessToast }: ToastProps) {
   // SET_USER action exists precisely because that is not guaranteed). A
   // once-only useState initializer would leave a Select showing a value its
   // options no longer contain, fetching an API that answers 403.
-  const [chosenType, setType] = useState<ArchivedType | undefined>(undefined);
+  // The first type shown can come from `?type=`, so other pages can link
+  // straight to one kind of archived object (e.g. a dashboard list's
+  // "Archived" button opens `/archived/?type=dashboard`). Read once on mount:
+  // ListView rewrites the query string with its own keys afterwards.
+  const [chosenType, setType] = useState<ArchivedType | undefined>(() => {
+    const fromUrl = new URLSearchParams(history.location.search).get('type');
+    return ARCHIVED_TYPES.find(candidate => candidate === fromUrl);
+  });
   const type =
     chosenType && availableTypes.includes(chosenType)
       ? chosenType
