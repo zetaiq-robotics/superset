@@ -191,9 +191,9 @@ const mockRoutes = (
   fetchMock.post(datasetPurgeEndpoint, purgeResponse);
 };
 
-const renderArchivedList = (withStore = store) =>
+const renderArchivedList = (withStore = store, initialEntries = ['/archived/']) =>
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <QueryParamProvider adapter={ReactRouter5Adapter}>
         <ArchivedList />
       </QueryParamProvider>
@@ -309,6 +309,19 @@ test('delete permission alone does not authorize archived dashboard actions', as
   await screen.findByText('Deleted Dashboard One');
   expect(screen.queryAllByTestId('archived-row-restore')).toHaveLength(0);
   expect(screen.queryAllByTestId('archived-row-purge')).toHaveLength(0);
+});
+
+test('the type in the URL picks the list, so a page can link to archived dashboards', async () => {
+  mockRoutes();
+  renderArchivedList(store, ['/archived/?type=dashboard']);
+  expect(await screen.findByText('Deleted Dashboard One')).toBeInTheDocument();
+  expect(screen.queryByText('Deleted Chart One')).not.toBeInTheDocument();
+});
+
+test('an unknown type in the URL falls back to the first readable type', async () => {
+  mockRoutes();
+  renderArchivedList(store, ['/archived/?type=nonsense']);
+  expect(await screen.findByText('Deleted Chart One')).toBeInTheDocument();
 });
 
 test('switching to a read-only type does not retain write actions', async () => {
